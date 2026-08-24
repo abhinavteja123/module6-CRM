@@ -13,9 +13,7 @@ import {
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   MoreHorizontal,
-  CalendarDays,
   X,
   GripVertical,
   Loader2,
@@ -875,7 +873,7 @@ function Workspace({ role, user, profile, onLogout }) {
   if (!loaded && !admin)
     return (
       <div className="loading-screen">
-        <Loader2 className="spin" /> Loading your private workspace…
+        <Loader2 className="spin" /> Loading workspace…
       </div>
     );
   const content =
@@ -999,13 +997,6 @@ function Workspace({ role, user, profile, onLogout }) {
           ))}
         </nav>
         <div className="side-bottom">
-          <div className="privacy">
-            <ShieldCheck size={18} />
-            <div>
-              <b>Private workspace</b>
-              <small>Database-level isolation</small>
-            </div>
-          </div>
           <button className="logout" onClick={onLogout}>
             <LogOut size={17} /> Sign out
           </button>
@@ -1424,8 +1415,7 @@ function Overview({ admin, orgs, contacts, reports, cards, stages, managers }) {
           </div>
         ))}
       </div>
-      <div className="grid-two">
-        <div className="panel">
+      <div className="panel overview-panel">
           <div className="panel-head">
             <div>
               <h3>{admin ? "Placement managers" : "Pipeline snapshot"}</h3>
@@ -1441,18 +1431,6 @@ function Overview({ admin, orgs, contacts, reports, cards, stages, managers }) {
           ) : (
             <Pipeline cards={cards} stages={stages} />
           )}
-        </div>
-        <div className="panel focus">
-          <div className="focus-icon">
-            <CalendarDays size={20} />
-          </div>
-          <p className="eyebrow">SECURITY</p>
-          <h3>Private by design.</h3>
-          <p className="muted">
-            Your records are protected by Supabase Row Level Security and are
-            never visible to other managers or admins.
-          </p>
-        </div>
       </div>
     </>
   );
@@ -1771,7 +1749,7 @@ function Kanban({
                 <button className="icon-btn" title={`Edit ${stage.name}`} onClick={() => onManageStage(stage)}><SlidersHorizontal size={15} /></button>
               </div>
               {overLimit && <div className="wip-warning">WIP limit exceeded</div>}
-              <div className="cards">
+              <div className={`cards ${shownCards.length ? "" : "is-empty"}`}>
                 {shownCards.map((card) => {
                   const overdue = card.due_date && card.due_date < today;
                   return (
@@ -1890,20 +1868,6 @@ function SettingsPage() {
   return (
     <div className="panel settings">
       <h3>Workspace settings</h3>
-      <p className="muted">
-        Your workspace is protected by role-based access and database-level row
-        security.
-      </p>
-      <div className="setting-row">
-        <div>
-          <b>Data isolation</b>
-          <small>
-            Only you can read or edit your organizations, contacts, reports, and
-            pipeline.
-          </small>
-        </div>
-        <span className="badge active">Enabled</span>
-      </div>
       <div className="setting-row">
         <div>
           <b>Realtime sync</b>

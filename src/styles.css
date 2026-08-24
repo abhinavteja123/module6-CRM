@@ -15,3 +15,4 @@
 .kanban-col{flex:1 0 220px;min-width:220px}
 @media(max-width:650px){.kanban{overflow-x:auto;overflow-y:hidden}.kanban-col{flex:0 0 270px}}
 .form-actions-right{display:flex;align-items:center;justify-content:flex-end;gap:8px}.form-actions.has-delete{justify-content:space-between;align-items:center}.danger-outline{border:1px solid #efc4c8;color:#c54652;background:#fff}.danger-outline:hover{background:#fce9ea;border-color:#e5a0a7}
+.kanban-col .cards.is-empty{flex:0 0 auto;min-height:0}
