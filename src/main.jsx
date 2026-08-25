@@ -31,6 +31,30 @@ const defaultStages = [
   { id: "won", name: "Closed Won", color: "#10b981" },
   { id: "lost", name: "Closed Lost", color: "#ef4444" },
 ];
+const workspaceCopy = {
+  company: {
+    toggle: "Companies",
+    organization: "Organization",
+    organizations: "Organizations",
+    person: "Contact",
+    people: "Contacts",
+    role: "Designation",
+    focus: "Industry",
+    focusPlaceholder: "Technology",
+    organizationPlaceholder: "e.g. Acme Corp",
+  },
+  university: {
+    toggle: "Universities",
+    organization: "University",
+    organizations: "Universities",
+    person: "Professor",
+    people: "Professors",
+    role: "Department / role",
+    focus: "Academic focus",
+    focusPlaceholder: "BTech, BBA",
+    organizationPlaceholder: "e.g. VIT University",
+  },
+};
 const seedOrgs = [
   {
     id: 1,
@@ -39,6 +63,7 @@ const seedOrgs = [
     city: "Bengaluru",
     status: "active",
     website: "northstar.io",
+    relationship_type: "company",
   },
   {
     id: 2,
@@ -47,6 +72,7 @@ const seedOrgs = [
     city: "Hyderabad",
     status: "prospect",
     website: "meridian.health",
+    relationship_type: "company",
   },
   {
     id: 3,
@@ -55,6 +81,25 @@ const seedOrgs = [
     city: "Pune",
     status: "active",
     website: "vertex.co",
+    relationship_type: "company",
+  },
+  {
+    id: 4,
+    name: "VIT University",
+    industry: "Engineering and technology",
+    city: "Vellore",
+    status: "active",
+    website: "vit.ac.in",
+    relationship_type: "university",
+  },
+  {
+    id: 5,
+    name: "IIT Hyderabad",
+    industry: "Higher education",
+    city: "Hyderabad",
+    status: "prospect",
+    website: "iith.ac.in",
+    relationship_type: "university",
   },
 ];
 const seedContacts = [
@@ -73,6 +118,16 @@ const seedContacts = [
     organization_id: 2,
     email: "priya@meridian.health",
     phone: "+91 99887 66554",
+    relationship_type: "company",
+  },
+  {
+    id: 3,
+    name: "Dr. Kavya Rao",
+    designation: "Professor, Computer Science",
+    organization_id: 4,
+    email: "kavya.rao@vit.ac.in",
+    phone: "+91 98765 11122",
+    relationship_type: "university",
   },
 ];
 const seedReports = [
@@ -93,6 +148,15 @@ const seedReports = [
     summary: "Introduced the placement program and understood current needs.",
     action_items: "Follow up next week.",
     attendees: "Priya Shah, Me",
+  },
+  {
+    id: 3,
+    title: "Faculty partnership discussion",
+    organization_id: 4,
+    meeting_date: "2026-08-20",
+    summary: "Discussed faculty introductions and the next campus engagement.",
+    action_items: "Share placement calendar.",
+    attendees: "Dr. Kavya Rao, Me",
   },
 ];
 const seedCards = [
@@ -336,6 +400,10 @@ function App() {
 function Workspace({ role, user, profile, onLogout }) {
   const admin = role === "admin";
   const [active, setActive] = useState("Overview"),
+    [workspaceMode, setWorkspaceMode] = useState(() => {
+      const saved = window.localStorage.getItem("placement-crm-workspace-mode");
+      return saved === "university" ? "university" : "company";
+    }),
     [query, setQuery] = useState(""),
     [modal, setModal] = useState(null),
     [busy, setBusy] = useState(false),
@@ -354,9 +422,35 @@ function Workspace({ role, user, profile, onLogout }) {
     [editingCard, setEditingCard] = useState(null),
     [editingStage, setEditingStage] = useState(null),
     [loaded, setLoaded] = useState(!isSupabaseConfigured);
+  const copy = workspaceCopy[workspaceMode];
+  const organizationNav = workspaceMode === "university" ? "Universities" : "Organizations";
+  const peopleNav = workspaceMode === "university" ? "Professors" : "Contacts";
+  const visibleOrgs = orgs.filter(
+    (org) => (org.relationship_type || "company") === workspaceMode,
+  );
+  const visibleOrgIds = new Set(visibleOrgs.map((org) => String(org.id)));
+  const visibleContacts = contacts.filter((contact) =>
+    visibleOrgIds.has(String(contact.organization_id)),
+  );
+  const visibleReports = reports.filter((report) =>
+    visibleOrgIds.has(String(report.organization_id)),
+  );
+  const visibleCards = cards.filter((card) =>
+    visibleOrgIds.has(String(card.organization_id)),
+  );
   const nav = admin
     ? ["Overview", "Placement Managers", "Settings"]
-    : ["Overview", "Organizations", "Contacts", "Meeting Reports", "Kanban"];
+    : ["Overview", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
+  const switchWorkspace = (nextMode) => {
+    setWorkspaceMode(nextMode);
+    window.localStorage.setItem("placement-crm-workspace-mode", nextMode);
+    setActive("Overview");
+    setQuery("");
+    setModal(null);
+    setEditingReport(null);
+    setEditingCard(null);
+    setEditingStage(null);
+  };
   const refresh = async () => {
     if (!user) return;
     try {
@@ -506,6 +600,7 @@ function Workspace({ role, user, profile, onLogout }) {
       "organizations",
       {
         name: f.get("name"),
+        relationship_type: workspaceMode,
         industry: f.get("industry"),
         city: f.get("city"),
         website: f.get("website"),
@@ -630,6 +725,13 @@ function Workspace({ role, user, profile, onLogout }) {
         if (e) throw new Error(e.message);
       }
       setOrgs((prev) => prev.filter((x) => x.id !== id));
+      setContacts((prev) => prev.filter((contact) => String(contact.organization_id) !== String(id)));
+      setReports((prev) => prev.filter((report) => String(report.organization_id) !== String(id)));
+      setCards((prev) => prev.map((card) => (
+        String(card.organization_id) === String(id)
+          ? { ...card, organization_id: null }
+          : card
+      )));
     } catch (e) {
       setError(e.message);
     }
@@ -880,10 +982,12 @@ function Workspace({ role, user, profile, onLogout }) {
     active === "Overview" ? (
       <Overview
         admin={admin}
-        orgs={orgs}
-        contacts={contacts}
-        reports={reports}
+        mode={workspaceMode}
+        orgs={visibleOrgs}
+        contacts={visibleContacts}
+        reports={visibleReports}
         cards={cards}
+        visibleCards={visibleCards}
         stages={stages}
         managers={managers}
       />
@@ -896,17 +1000,20 @@ function Workspace({ role, user, profile, onLogout }) {
       />
     ) : admin ? (
       <SettingsPage />
-    ) : active === "Organizations" ? (
+    ) : active === organizationNav ? (
       <Organizations
-        orgs={orgs}
+        orgs={visibleOrgs}
+        mode={workspaceMode}
         query={query}
         setQuery={setQuery}
         onAdd={() => setModal("org")}
         onDelete={deleteOrg}
       />
-    ) : active === "Contacts" ? (
+    ) : active === peopleNav ? (
       <Contacts
-        contacts={contacts}
+        contacts={visibleContacts}
+        organizations={visibleOrgs}
+        mode={workspaceMode}
         orgName={orgName}
         query={query}
         setQuery={setQuery}
@@ -914,9 +1021,10 @@ function Workspace({ role, user, profile, onLogout }) {
       />
     ) : active === "Meeting Reports" ? (
       <Reports
-        reports={reports}
+        reports={visibleReports}
+        mode={workspaceMode}
         orgName={orgName}
-        organizations={orgs}
+        organizations={visibleOrgs}
         onAdd={() => {
           setEditingReport(null);
           setModal("report");
@@ -955,7 +1063,7 @@ function Workspace({ role, user, profile, onLogout }) {
       />
     );
   return (
-    <div className="app-shell">
+    <div className={`app-shell workspace-${workspaceMode}`}>
       <aside>
         <div className="brand">
           <div className="brand-mark">P</div>
@@ -981,9 +1089,9 @@ function Workspace({ role, user, profile, onLogout }) {
                 <LayoutDashboard size={18} />
               ) : n === "Placement Managers" ? (
                 <Users size={18} />
-              ) : n === "Organizations" ? (
+              ) : n === "Organizations" || n === "Universities" ? (
                 <Building2 size={18} />
-              ) : n === "Contacts" ? (
+              ) : n === "Contacts" || n === "Professors" ? (
                 <Users size={18} />
               ) : n === "Meeting Reports" ? (
                 <FileText size={18} />
@@ -1010,27 +1118,44 @@ function Workspace({ role, user, profile, onLogout }) {
             </p>
             <h1>{active}</h1>
           </div>
-          <div className="top-user">
-            <div className="avatar">
-              {admin
-                ? "AD"
-                : (profile?.full_name || "PM")
-                    .split(" ")
-                    .map((x) => x[0])
-                    .join("")
-                    .slice(0, 2)}
-            </div>
-            <div>
-              <b>
+          <div className="header-actions">
+            {!admin && (
+              <div className="workspace-toggle" role="group" aria-label="Workspace type">
+                {Object.entries(workspaceCopy).map(([key, item]) => (
+                  <button
+                    type="button"
+                    key={key}
+                    className={workspaceMode === key ? "active" : ""}
+                    onClick={() => switchWorkspace(key)}
+                    aria-pressed={workspaceMode === key}
+                  >
+                    {item.toggle}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="top-user">
+              <div className="avatar">
                 {admin
-                  ? profile?.full_name || "Admin User"
-                  : profile?.full_name || "Placement Manager"}
-              </b>
-              <small>{admin ? "Administrator" : "Placement Manager"}</small>
+                  ? "AD"
+                  : (profile?.full_name || "PM")
+                      .split(" ")
+                      .map((x) => x[0])
+                      .join("")
+                      .slice(0, 2)}
+              </div>
+              <div>
+                <b>
+                  {admin
+                    ? profile?.full_name || "Admin User"
+                    : profile?.full_name || "Placement Manager"}
+                </b>
+                <small>{admin ? "Administrator" : "Placement Manager"}</small>
+              </div>
+              <button className="icon-btn">
+                <MoreHorizontal size={20} />
+              </button>
             </div>
-            <button className="icon-btn">
-              <MoreHorizontal size={20} />
-            </button>
           </div>
         </header>
         <section className="content">
@@ -1046,18 +1171,18 @@ function Workspace({ role, user, profile, onLogout }) {
         </section>
       </main>
       {modal === "org" && (
-        <Modal title="Add organization" onClose={() => setModal(null)}>
+        <Modal title={`Add ${copy.organization.toLowerCase()}`} onClose={() => setModal(null)}>
           <form onSubmit={addOrg}>
             <Field
-              label="Organization name"
+              label={`${copy.organization} name`}
               name="name"
-              placeholder="e.g. Acme Corp"
+              placeholder={copy.organizationPlaceholder}
             />
             <div className="form-grid">
               <Field
-                label="Industry"
+                label={copy.focus}
                 name="industry"
-                placeholder="Technology"
+                placeholder={copy.focusPlaceholder}
               />
               <Field label="City" name="city" placeholder="Bengaluru" />
             </div>
@@ -1083,19 +1208,19 @@ function Workspace({ role, user, profile, onLogout }) {
         </Modal>
       )}
       {modal === "contact" && (
-        <Modal title="Add contact" onClose={() => setModal(null)}>
+        <Modal title={`Add ${copy.person.toLowerCase()}`} onClose={() => setModal(null)}>
           <form onSubmit={addContact}>
             <div className="form-grid">
               <Field label="Full name" name="name" placeholder="Person name" />
               <Field
-                label="Designation"
+                label={copy.role}
                 name="designation"
-                placeholder="HR Manager"
+                placeholder={workspaceMode === "university" ? "Professor" : "HR Manager"}
               />
             </div>
-            <Select label="Organization" name="organization_id">
-              <option value="">Choose organization</option>
-              {orgs.map((o) => (
+            <Select label={copy.organization} name="organization_id">
+              <option value="">Choose {copy.organization.toLowerCase()}</option>
+              {visibleOrgs.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.name}
                 </option>
@@ -1125,7 +1250,7 @@ function Workspace({ role, user, profile, onLogout }) {
       )}
       {modal === "report" && (
         <Modal
-          title={editingReport ? "Edit meeting report" : "New meeting report"}
+          title={editingReport ? `Edit ${copy.person.toLowerCase()} meeting report` : `New ${copy.person.toLowerCase()} meeting report`}
           onClose={() => {
             setModal(null);
             setEditingReport(null);
@@ -1136,17 +1261,17 @@ function Workspace({ role, user, profile, onLogout }) {
               <Field label="Title" name="title" defaultValue={editingReport?.title || ""} placeholder="Meeting title" />
               <Field label="Meeting date" type="date" name="meeting_date" defaultValue={editingReport?.meeting_date || ""} />
             </div>
-            <Select label="Organization" name="organization_id" defaultValue={editingReport?.organization_id || ""}>
-              <option value="">Choose organization</option>
-              {orgs.map((o) => (
+            <Select label={copy.organization} name="organization_id" defaultValue={editingReport?.organization_id || ""}>
+              <option value="">Choose {copy.organization.toLowerCase()}</option>
+              {visibleOrgs.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.name}
                 </option>
               ))}
             </Select>
-            <Select label="Contact" name="contact_id" defaultValue={editingReport?.contact_id || ""}>
-              <option value="">Choose contact</option>
-              {contacts.map((c) => (
+            <Select label={copy.person} name="contact_id" defaultValue={editingReport?.contact_id || ""}>
+              <option value="">Choose {copy.person.toLowerCase()}</option>
+              {visibleContacts.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
@@ -1356,7 +1481,8 @@ function Workspace({ role, user, profile, onLogout }) {
   );
 }
 
-function Overview({ admin, orgs, contacts, reports, cards, stages, managers }) {
+function Overview({ admin, mode, orgs, contacts, reports, cards, visibleCards, stages, managers }) {
+  const copy = workspaceCopy[mode];
   const closedStageIds = stages
     .filter((stage) => /closed|done|completed/i.test(stage.name || ""))
     .map((stage) => String(stage.id));
@@ -1382,12 +1508,12 @@ function Overview({ admin, orgs, contacts, reports, cards, stages, managers }) {
         ],
       ]
     : [
-        ["Organizations", orgs.length, "Your relationships"],
-        ["Contacts", contacts.length, "Across organizations"],
+        [copy.organizations, orgs.length, `Your ${copy.organizations.toLowerCase()}`],
+        [copy.people, contacts.length, `Across ${copy.organizations.toLowerCase()}`],
         ["Meeting reports", reports.length, "Relationship history"],
         [
           "Open opportunities",
-          cards.filter((c) => !closedStageIds.includes(String(c.stage_id))).length,
+          visibleCards.filter((c) => !closedStageIds.includes(String(c.stage_id))).length,
           "In your pipeline",
         ],
       ];
@@ -1426,10 +1552,10 @@ function Overview({ admin, orgs, contacts, reports, cards, stages, managers }) {
               </p>
             </div>
           </div>
-          {admin ? (
-            <Activity managers={managers} />
-          ) : (
-            <Pipeline cards={cards} stages={stages} />
+            {admin ? (
+              <Activity managers={managers} />
+            ) : (
+            <Pipeline cards={visibleCards} stages={stages} />
           )}
       </div>
     </>
@@ -1501,7 +1627,8 @@ function Toolbar({ query, setQuery, button, onAdd }) {
     </div>
   );
 }
-function Organizations({ orgs, query, setQuery, onAdd, onDelete }) {
+function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
+  const copy = workspaceCopy[mode];
   const [status, setStatus] = useState("");
   const rows = orgs.filter(
     (o) =>
@@ -1513,30 +1640,35 @@ function Organizations({ orgs, query, setQuery, onAdd, onDelete }) {
       <Toolbar
         query={query}
         setQuery={setQuery}
-        button="Add organization"
+        button={`Add ${copy.organization.toLowerCase()}`}
         onAdd={onAdd}
       />
       <div className="panel table-panel">
         <div className="table-head">
           <h3>
-            Organizations <span className="count">{rows.length}</span>
+            {copy.organizations} <span className="count">{rows.length}</span>
           </h3>
-          <select
-            className="filter"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="prospect">Prospect</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
+          <div className="table-head-actions">
+            <select
+              className="filter"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              <option value="prospect">Prospect</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+            <button className="btn primary" onClick={onAdd}>
+              <Plus size={15} /> Add {copy.organization.toLowerCase()}
+            </button>
+          </div>
         </div>
         <table>
           <thead>
             <tr>
-              <th>Organization</th>
-              <th>Industry</th>
+              <th>{copy.organization}</th>
+              <th>{copy.focus}</th>
               <th>Location</th>
               <th>Status</th>
               <th>Updated</th>
@@ -1561,8 +1693,8 @@ function Organizations({ orgs, query, setQuery, onAdd, onDelete }) {
                     : "Today"}
                 </td>
                 <td>
-                  <button className="icon-btn" onClick={() => onDelete(o.id)}>
-                    <MoreHorizontal size={18} />
+                  <button className="delete-btn" onClick={() => onDelete(o.id)}>
+                    Delete
                   </button>
                 </td>
               </tr>
@@ -1573,38 +1705,52 @@ function Organizations({ orgs, query, setQuery, onAdd, onDelete }) {
     </>
   );
 }
-function Contacts({ contacts, orgName, query, setQuery, onAdd }) {
+function Contacts({ contacts, organizations, mode, orgName, query, setQuery, onAdd }) {
+  const copy = workspaceCopy[mode];
+  const [organizationFilter, setOrganizationFilter] = useState("");
+  const rows = contacts.filter(
+    (contact) =>
+      (contact.name || "").toLowerCase().includes(query.toLowerCase()) &&
+      (!organizationFilter || String(contact.organization_id) === organizationFilter),
+  );
   return (
     <>
       <Toolbar
         query={query}
         setQuery={setQuery}
-        button="Add contact"
+        button={`Add ${copy.person.toLowerCase()}`}
         onAdd={onAdd}
       />
       <div className="panel table-panel">
         <div className="table-head">
           <h3>
-            Contacts <span className="count">{contacts.length}</span>
+            {copy.people} <span className="count">{rows.length}</span>
           </h3>
-          <button className="filter">All organizations ▾</button>
+          <select
+            className="filter"
+            value={organizationFilter}
+            onChange={(e) => setOrganizationFilter(e.target.value)}
+          >
+            <option value="">All {copy.organizations.toLowerCase()}</option>
+            {organizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.name}
+              </option>
+            ))}
+          </select>
         </div>
         <table>
           <thead>
             <tr>
-              <th>Contact</th>
-              <th>Organization</th>
-              <th>Designation</th>
+              <th>{copy.person}</th>
+              <th>{copy.organization}</th>
+              <th>{copy.role}</th>
               <th>Email</th>
               <th>Phone</th>
             </tr>
           </thead>
           <tbody>
-            {contacts
-              .filter((c) =>
-                (c.name || "").toLowerCase().includes(query.toLowerCase()),
-              )
-              .map((c) => (
+            {rows.map((c) => (
                 <tr key={c.id}>
                   <td>
                     <b>{c.name}</b>
@@ -1621,7 +1767,8 @@ function Contacts({ contacts, orgName, query, setQuery, onAdd }) {
     </>
   );
 }
-function Reports({ reports, orgName, organizations, onAdd, onEdit, onDelete, onToggleAction }) {
+function Reports({ reports, mode, orgName, organizations, onAdd, onEdit, onDelete, onToggleAction }) {
+  const copy = workspaceCopy[mode];
   const [search, setSearch] = useState("");
   const [range, setRange] = useState("all");
   const [sort, setSort] = useState("newest");
@@ -1649,7 +1796,7 @@ function Reports({ reports, orgName, organizations, onAdd, onEdit, onDelete, onT
       <div className="stat"><span>Pending actions</span><strong>{pending}</strong><small>Items to complete</small></div>
       <div className="stat"><span>Overdue follow-ups</span><strong className={overdue ? "danger-number" : ""}>{overdue}</strong><small>Need attention</small></div>
     </div>
-    <div className="toolbar report-toolbar"><div className="search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search reports..."/></div><select className="filter" value={organizationFilter} onChange={(e) => setOrganizationFilter(e.target.value)}><option value="">All organizations</option>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select><select className="filter" value={range} onChange={(e) => setRange(e.target.value)}><option value="all">All dates</option><option value="this_week">This week</option><option value="this_month">This month</option><option value="overdue">Overdue follow-ups</option></select><select className="filter" value={sort} onChange={(e) => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><button className="btn primary" onClick={onAdd}><Plus size={17}/> New report</button></div>
+    <div className="toolbar report-toolbar"><div className="search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${copy.person.toLowerCase()} meetings...`}/></div><select className="filter" value={organizationFilter} onChange={(e) => setOrganizationFilter(e.target.value)}><option value="">All {copy.organizations.toLowerCase()}</option>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select><select className="filter" value={range} onChange={(e) => setRange(e.target.value)}><option value="all">All dates</option><option value="this_week">This week</option><option value="this_month">This month</option><option value="overdue">Overdue follow-ups</option></select><select className="filter" value={sort} onChange={(e) => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><button className="btn primary" onClick={onAdd}><Plus size={17}/> New report</button></div>
     <div className="reports">{filtered.map((r) => { const isOpen = expanded === r.id; const actionItems = r.action_items_list || []; const isOverdue = r.follow_up_date && new Date(r.follow_up_date) < start; return <article className={`report panel ${isOverdue ? "report-overdue" : ""}`} key={r.id}><div className="report-date"><b>{new Date(r.meeting_date).getDate()}</b><span>{new Date(r.meeting_date).toLocaleString("en", {month:"short"}).toUpperCase()}</span></div><div className="report-body"><div className="report-top"><div><h3>{r.title}</h3><p className="muted">{orgName(r.organization_id)} · {r.attendees}</p><div className="report-badges"><span className={`report-badge ${r.outcome || "neutral"}`}>{(r.outcome || "neutral").replaceAll("_", " ")}</span><span className="report-badge">{(r.meeting_type || "video_call").replaceAll("_", " ")}</span>{r.follow_up_date && <span className={`report-badge ${isOverdue ? "overdue" : ""}`}>Follow-up: {r.follow_up_date}</span>}</div></div><div className="report-actions"><button className="text-btn" onClick={() => setExpanded(isOpen ? null : r.id)}>{isOpen ? "Collapse" : "Details"}</button><button className="text-btn" onClick={() => onEdit(r)}>Edit</button><button className="delete-btn" onClick={() => onDelete(r.id)}>Delete</button></div></div><p>{r.summary}</p>{isOpen && <div className="report-details"><div><b>Attendees</b><p>{r.attendees}</p></div><div><b>Action items</b>{actionItems.length ? actionItems.map((a) => <label className={`action-check ${a.is_completed ? "completed" : ""}`} key={a.id}><input type="checkbox" checked={a.is_completed} onChange={(e) => onToggleAction(r.id, a.id, e.target.checked)}/><span>{a.text}</span></label>) : <p>{r.action_items || "No action items."}</p>}</div></div>}<div className="action"><b>{actionItems.length ? `${actionItems.filter((a) => !a.is_completed).length} pending action${actionItems.filter((a) => !a.is_completed).length === 1 ? "" : "s"}` : "Next action"}</b><span>{r.action_items || "Open details to review action items."}</span></div></div></article>})}</div>{!filtered.length && <div className="empty-state panel"><h3>No meeting reports found</h3><p className="muted">Try changing your filters or create a new report.</p></div>}
   </>;
 }

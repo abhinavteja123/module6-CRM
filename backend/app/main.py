@@ -1,6 +1,6 @@
 import os
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -77,6 +77,7 @@ def owned(table: str, user_id: str, row_id: str | None = None):
 
 class OrganizationIn(BaseModel):
     name: str = Field(min_length=1)
+    relationship_type: Literal["company", "university"] = "company"
     industry: str = Field(min_length=1)
     website: str = Field(min_length=1)
     city: str = Field(min_length=1)

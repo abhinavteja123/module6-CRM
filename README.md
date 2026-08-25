@@ -29,6 +29,10 @@ Apply `supabase/migrations/20260823000000_initial_schema.sql`, then deploy `supa
 
 The browser never receives a service-role key. Admin roster access is limited to `profiles`; the five PM-owned tables have no admin policy and remain database-isolated.
 
+## Company and university workspaces
+
+Placement managers can switch between the Companies and Universities workspaces from the header. Organizations, contacts/professors, meeting reports, and the overview are filtered to the selected workspace. The Kanban board is shared so the same pipeline remains available across both relationship types. Existing organizations are treated as Companies; new records inherit the active workspace.
+
 ## FastAPI mode
 
 The production architecture uses FastAPI for all application data APIs while Supabase provides Auth and PostgreSQL. Start the backend from `backend/`, copy `backend/.env.example` to `backend/.env`, and set `VITE_API_URL=http://localhost:8000` in the frontend `.env`. The frontend continues to use Supabase Auth to obtain the JWT, then sends that JWT to FastAPI. Do not put `SUPABASE_SERVICE_ROLE_KEY` in the frontend.

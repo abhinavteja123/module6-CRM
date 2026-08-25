@@ -294,6 +294,7 @@ export type Database = {
           name: string
           notes: string | null
           placement_manager_id: string
+          relationship_type: string
           status: Database["public"]["Enums"]["organization_status"]
           updated_at: string
           website: string | null
@@ -306,6 +307,7 @@ export type Database = {
           name: string
           notes?: string | null
           placement_manager_id: string
+          relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
           updated_at?: string
           website?: string | null
@@ -318,6 +320,7 @@ export type Database = {
           name?: string
           notes?: string | null
           placement_manager_id?: string
+          relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
           updated_at?: string
           website?: string | null
