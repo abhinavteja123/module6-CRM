@@ -64,6 +64,7 @@ const seedOrgs = [
     status: "active",
     website: "northstar.io",
     relationship_type: "company",
+    expected_ctc: "12 LPA",
   },
   {
     id: 2,
@@ -73,6 +74,7 @@ const seedOrgs = [
     status: "prospect",
     website: "meridian.health",
     relationship_type: "company",
+    expected_ctc: "8 LPA",
   },
   {
     id: 3,
@@ -82,6 +84,7 @@ const seedOrgs = [
     status: "active",
     website: "vertex.co",
     relationship_type: "company",
+    expected_ctc: "10 LPA",
   },
   {
     id: 4,
@@ -91,6 +94,7 @@ const seedOrgs = [
     status: "active",
     website: "vit.ac.in",
     relationship_type: "university",
+    expected_ctc: null,
   },
   {
     id: 5,
@@ -100,6 +104,7 @@ const seedOrgs = [
     status: "prospect",
     website: "iith.ac.in",
     relationship_type: "university",
+    expected_ctc: null,
   },
 ];
 const seedContacts = [
@@ -601,6 +606,7 @@ function Workspace({ role, user, profile, onLogout }) {
       {
         name: f.get("name"),
         relationship_type: workspaceMode,
+        expected_ctc: workspaceMode === "company" ? f.get("expected_ctc") : null,
         industry: f.get("industry"),
         city: f.get("city"),
         website: f.get("website"),
@@ -1186,6 +1192,13 @@ function Workspace({ role, user, profile, onLogout }) {
               />
               <Field label="City" name="city" placeholder="Bengaluru" />
             </div>
+            {workspaceMode === "company" && (
+              <Field
+                label="Expected CTC"
+                name="expected_ctc"
+                placeholder="e.g. 8 LPA or ₹8–10 LPA"
+              />
+            )}
             <div className="form-grid">
               <Field label="Website" name="website" placeholder="acme.com" />
               <Select label="Status" name="status">
@@ -1659,9 +1672,6 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
             </select>
-            <button className="btn primary" onClick={onAdd}>
-              <Plus size={15} /> Add {copy.organization.toLowerCase()}
-            </button>
           </div>
         </div>
         <table>
@@ -1669,6 +1679,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
             <tr>
               <th>{copy.organization}</th>
               <th>{copy.focus}</th>
+              {mode === "company" && <th>Expected CTC</th>}
               <th>Location</th>
               <th>Status</th>
               <th>Updated</th>
@@ -1683,6 +1694,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
                   <small>{o.website}</small>
                 </td>
                 <td>{o.industry}</td>
+                {mode === "company" && <td>{o.expected_ctc || "-"}</td>}
                 <td>{o.city}</td>
                 <td>
                   <span className={`badge ${o.status}`}>{o.status}</span>

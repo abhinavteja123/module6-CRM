@@ -294,6 +294,7 @@ export type Database = {
           name: string
           notes: string | null
           placement_manager_id: string
+          expected_ctc: string | null
           relationship_type: string
           status: Database["public"]["Enums"]["organization_status"]
           updated_at: string
@@ -307,6 +308,7 @@ export type Database = {
           name: string
           notes?: string | null
           placement_manager_id: string
+          expected_ctc?: string | null
           relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
           updated_at?: string
@@ -320,6 +322,7 @@ export type Database = {
           name?: string
           notes?: string | null
           placement_manager_id?: string
+          expected_ctc?: string | null
           relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
           updated_at?: string

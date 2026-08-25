@@ -78,6 +78,7 @@ def owned(table: str, user_id: str, row_id: str | None = None):
 class OrganizationIn(BaseModel):
     name: str = Field(min_length=1)
     relationship_type: Literal["company", "university"] = "company"
+    expected_ctc: str | None = Field(default=None, min_length=1)
     industry: str = Field(min_length=1)
     website: str = Field(min_length=1)
     city: str = Field(min_length=1)
