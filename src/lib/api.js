@@ -1,13 +1,73 @@
-import { supabase } from './supabaseClient';
+const ACCESS_TOKEN_KEY = "exora_access_token";
+const REFRESH_TOKEN_KEY = "exora_refresh_token";
+let refreshPromise = null;
 
-export const apiBase = import.meta.env.VITE_API_URL || '';
-export const isApiConfigured = Boolean(import.meta.env.VITE_API_URL);
+export const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+export const isApiConfigured = true;
+
+export function getAccessToken() {
+  return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function setAuthTokens({ access_token, refresh_token }) {
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, access_token);
+  window.localStorage.setItem(REFRESH_TOKEN_KEY, refresh_token);
+}
+
+export function clearAuthTokens() {
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+function refreshAccessToken(refreshToken) {
+  if (!refreshPromise) {
+    refreshPromise = request(
+      "/api/auth/refresh",
+      { method: "POST", body: JSON.stringify({ refresh_token: refreshToken }) },
+      null,
+    )
+      .then((tokens) => {
+        setAuthTokens(tokens);
+        return tokens;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+async function request(path, options = {}, token = getAccessToken()) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${apiBase}${path}`, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body.detail?.message || body.detail || body.error || "API request failed");
+    error.status = response.status;
+    error.payload = body.detail || body;
+    throw error;
+  }
+  return body;
+}
 
 export async function apiFetch(path, options = {}) {
-  if (!supabase) throw new Error('Supabase Auth is not configured');
-  const { data: { session } } = await supabase.auth.getSession();
-  const response = await fetch(`${apiBase}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}), Authorization: `Bearer ${session?.access_token || ''}` } });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || body.error || 'API request failed');
-  return body;
+  try {
+    return await request(path, options);
+  } catch (error) {
+    const refreshToken = window.localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (error.status !== 401 || !refreshToken || path === "/api/auth/refresh" || path === "/api/auth/login") {
+      throw error;
+    }
+    try {
+      const tokens = await refreshAccessToken(refreshToken);
+      return await request(path, options, tokens.access_token);
+    } catch (refreshError) {
+      clearAuthTokens();
+      throw refreshError;
+    }
+  }
 }

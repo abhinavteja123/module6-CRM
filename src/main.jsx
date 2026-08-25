@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
-import { apiFetch, isApiConfigured } from "./lib/api";
+import {
+  apiFetch,
+  clearAuthTokens,
+  getAccessToken,
+  isApiConfigured,
+  setAuthTokens,
+} from "./lib/api";
 import {
   Building2,
   Users,
@@ -43,17 +48,6 @@ const workspaceCopy = {
     focusPlaceholder: "Technology",
     organizationPlaceholder: "e.g. Acme Corp",
   },
-  university: {
-    toggle: "Universities",
-    organization: "University",
-    organizations: "Universities",
-    person: "Professor",
-    people: "Professors",
-    role: "Department / role",
-    focus: "Academic focus",
-    focusPlaceholder: "BTech, BBA",
-    organizationPlaceholder: "e.g. VIT University",
-  },
 };
 const seedOrgs = [
   {
@@ -86,26 +80,6 @@ const seedOrgs = [
     relationship_type: "company",
     expected_ctc: "10 LPA",
   },
-  {
-    id: 4,
-    name: "VIT University",
-    industry: "Engineering and technology",
-    city: "Vellore",
-    status: "active",
-    website: "vit.ac.in",
-    relationship_type: "university",
-    expected_ctc: null,
-  },
-  {
-    id: 5,
-    name: "IIT Hyderabad",
-    industry: "Higher education",
-    city: "Hyderabad",
-    status: "prospect",
-    website: "iith.ac.in",
-    relationship_type: "university",
-    expected_ctc: null,
-  },
 ];
 const seedContacts = [
   {
@@ -124,15 +98,6 @@ const seedContacts = [
     email: "priya@meridian.health",
     phone: "+91 99887 66554",
     relationship_type: "company",
-  },
-  {
-    id: 3,
-    name: "Dr. Kavya Rao",
-    designation: "Professor, Computer Science",
-    organization_id: 4,
-    email: "kavya.rao@vit.ac.in",
-    phone: "+91 98765 11122",
-    relationship_type: "university",
   },
 ];
 const seedReports = [
@@ -153,15 +118,6 @@ const seedReports = [
     summary: "Introduced the placement program and understood current needs.",
     action_items: "Follow up next week.",
     attendees: "Priya Shah, Me",
-  },
-  {
-    id: 3,
-    title: "Faculty partnership discussion",
-    organization_id: 4,
-    meeting_date: "2026-08-20",
-    summary: "Discussed faculty introductions and the next campus engagement.",
-    action_items: "Share placement calendar.",
-    attendees: "Dr. Kavya Rao, Me",
   },
 ];
 const seedCards = [
@@ -257,7 +213,7 @@ function FormActions({ onClose, busy, onDelete }) {
   );
 }
 
-function Login({ onLogin, error, loading }) {
+function Login({ onLogin, onReset, error, loading }) {
   return (
     <div className="login">
       <div className="login-card">
@@ -265,7 +221,7 @@ function Login({ onLogin, error, loading }) {
           <div className="brand-mark">P</div>
           <div>
             <strong>
-              Placement<span>CRM</span>
+              Vextra<span>AI</span>
             </strong>
             <small>RELATIONSHIP OS</small>
           </div>
@@ -301,22 +257,10 @@ function Login({ onLogin, error, loading }) {
           <button className="btn primary full" disabled={loading}>
             {loading && <Loader2 size={15} className="spin" />}Sign in
           </button>
+          <button type="button" className="text-btn full" onClick={() => onReset(document.querySelector('input[name="email"]')?.value || "")}>
+            Request password change
+          </button>
         </form>
-        {!isSupabaseConfigured && (
-          <>
-            <div className="demo-hint">
-              Demo mode: preview either role below.
-            </div>
-            <div className="role-toggle">
-              <button type="button" onClick={() => onLogin("pm")}>
-                Placement Manager
-              </button>
-              <button type="button" onClick={() => onLogin("admin")}>
-                Admin
-              </button>
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
@@ -326,66 +270,66 @@ function App() {
   const [role, setRole] = useState(null),
     [user, setUser] = useState(null),
     [profile, setProfile] = useState(null),
-    [loading, setLoading] = useState(isSupabaseConfigured),
+    [loading, setLoading] = useState(true),
     [error, setError] = useState("");
-  const loadProfile = async (id) => {
+  const loadProfile = async () => {
     try {
-      const data = isApiConfigured
-        ? await apiFetch("/api/me")
-        : (await supabase.from("profiles").select("*").eq("id", id).single())
-            .data;
+      const data = await apiFetch("/api/me");
       if (!data) throw new Error("Profile not found");
       setProfile(data);
-      setRole(data.role === "admin" ? "admin" : "pm");
+      setUser(data);
+      setRole(data.role);
     } catch (e) {
+      clearAuthTokens();
       setError(e.message);
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => {
-    if (!supabase) return;
-    let live = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (live && data.session) {
-        setUser(data.session.user);
-        loadProfile(data.session.user.id);
-      } else if (live) setLoading(false);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!live) return;
-      if (session) {
-        setUser(session.user);
-        loadProfile(session.user.id);
-      } else {
-        setUser(null);
-        setProfile(null);
-        setRole(null);
-        setLoading(false);
-      }
-    });
-    return () => {
-      live = false;
-      subscription.unsubscribe();
-    };
+    if (getAccessToken()) loadProfile();
+    else setLoading(false);
   }, []);
   const login = async (value) => {
     setError("");
-    if (!isSupabaseConfigured) {
-      setRole(value);
-      return;
-    }
     setLoading(true);
-    const { error: e } = await supabase.auth.signInWithPassword(value);
-    if (e) {
+    try {
+      const data = await apiFetch("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify(value),
+      });
+      setAuthTokens(data);
+      setUser(data.user);
+      setProfile(data.profile);
+      setRole(data.profile.role);
+    } catch (e) {
       setError(e.message);
+    } finally {
       setLoading(false);
     }
   };
+  const requestPasswordReset = async (email) => {
+    if (!email) {
+      setError("Enter your email first.");
+      return;
+    }
+    try {
+      const data = await apiFetch("/api/auth/password-reset-request", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setError(data.message);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
   const logout = async () => {
-    if (supabase) await supabase.auth.signOut();
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // A local logout still clears the client session if the server is unavailable.
+    }
+    clearAuthTokens();
     setRole(null);
     setUser(null);
     setProfile(null);
@@ -396,122 +340,63 @@ function App() {
         <Loader2 className="spin" /> Loading workspace…
       </div>
     );
-  if (!role) return <Login onLogin={login} loading={loading} error={error} />;
+  if (!role) return <Login onLogin={login} onReset={requestPasswordReset} loading={loading} error={error} />;
   return (
     <Workspace role={role} user={user} profile={profile} onLogout={logout} />
   );
 }
 
 function Workspace({ role, user, profile, onLogout }) {
-  const admin = role === "admin";
+  const superAdmin = role === "super_admin";
+  const universityAdmin = role === "university_admin";
+  const supervisor = role === "coordinator" || role === "regional_manager";
+  const placementManager = role === "placement_manager";
   const [active, setActive] = useState("Overview"),
-    [workspaceMode, setWorkspaceMode] = useState(() => {
-      const saved = window.localStorage.getItem("placement-crm-workspace-mode");
-      return saved === "university" ? "university" : "company";
-    }),
     [query, setQuery] = useState(""),
-    [modal, setModal] = useState(null),
+    [modal, setModal] = useState(profile?.must_change_password ? "password" : null),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const [orgs, setOrgs] = useState(isSupabaseConfigured ? [] : seedOrgs),
-    [contacts, setContacts] = useState(
-      isSupabaseConfigured ? [] : seedContacts,
-    ),
-    [reports, setReports] = useState(isSupabaseConfigured ? [] : seedReports),
-    [cards, setCards] = useState(isSupabaseConfigured ? [] : seedCards),
-    [stages, setStages] = useState(isApiConfigured ? [] : defaultStages),
-    [managers, setManagers] = useState(
-      isSupabaseConfigured ? [] : seedManagers,
-    ),
+    [error, setError] = useState(""),
+    [duplicateOrg, setDuplicateOrg] = useState(null);
+  const [orgs, setOrgs] = useState([]),
+    [contacts, setContacts] = useState([]),
+    [reports, setReports] = useState([]),
+    [cards, setCards] = useState([]),
+    [stages, setStages] = useState([]),
+    [managers, setManagers] = useState([]),
+    [universities, setUniversities] = useState([]),
+    [teamSummary, setTeamSummary] = useState(null),
     [editingReport, setEditingReport] = useState(null),
     [editingCard, setEditingCard] = useState(null),
     [editingStage, setEditingStage] = useState(null),
-    [loaded, setLoaded] = useState(!isSupabaseConfigured);
-  const copy = workspaceCopy[workspaceMode];
-  const organizationNav = workspaceMode === "university" ? "Universities" : "Organizations";
-  const peopleNav = workspaceMode === "university" ? "Professors" : "Contacts";
-  const visibleOrgs = orgs.filter(
-    (org) => (org.relationship_type || "company") === workspaceMode,
-  );
-  const visibleOrgIds = new Set(visibleOrgs.map((org) => String(org.id)));
-  const visibleContacts = contacts.filter((contact) =>
-    visibleOrgIds.has(String(contact.organization_id)),
-  );
-  const visibleReports = reports.filter((report) =>
-    visibleOrgIds.has(String(report.organization_id)),
-  );
-  const visibleCards = cards.filter((card) =>
-    visibleOrgIds.has(String(card.organization_id)),
-  );
-  const nav = admin
-    ? ["Overview", "Placement Managers", "Settings"]
-    : ["Overview", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
-  const switchWorkspace = (nextMode) => {
-    setWorkspaceMode(nextMode);
-    window.localStorage.setItem("placement-crm-workspace-mode", nextMode);
-    setActive("Overview");
-    setQuery("");
-    setModal(null);
-    setEditingReport(null);
-    setEditingCard(null);
-    setEditingStage(null);
-  };
+    [editingUser, setEditingUser] = useState(null),
+    [loaded, setLoaded] = useState(false);
+  const mode = "company";
+  const copy = workspaceCopy.company;
+  const organizationNav = "Organizations";
+  const peopleNav = "Contacts";
+  const visibleOrgs = orgs;
+  const visibleContacts = contacts;
+  const visibleReports = reports;
+  const visibleCards = cards;
+  const nav = superAdmin
+    ? ["Overview", "Universities", "Users"]
+    : universityAdmin
+      ? ["Overview", "Team", organizationNav, peopleNav, "Meeting Reports"]
+      : supervisor
+        ? ["Overview", "Team"]
+        : ["Overview", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
   const refresh = async () => {
     if (!user) return;
     try {
-      if (isApiConfigured) {
-        const [o, c, r, k] = await Promise.all([
-          apiFetch("/api/organizations"),
-          apiFetch("/api/contacts"),
-          apiFetch("/api/meeting-reports"),
-          apiFetch("/api/kanban"),
-        ]);
-        setOrgs(o);
-        setContacts(c);
-        setReports(r);
-        // API mode receives UUID-backed stages from FastAPI. Do not fall back
-        // to demo IDs such as "proposal", because the database expects UUIDs.
+      const requests = [apiFetch("/api/organizations"), apiFetch("/api/contacts"), apiFetch("/api/meeting-reports")];
+      if (placementManager) requests.push(apiFetch("/api/kanban"));
+      const [o, c, r, k] = await Promise.all(requests);
+      setOrgs(o || []);
+      setContacts(c || []);
+      setReports(r || []);
+      if (k) {
         setStages(k.stages || []);
         setCards(k.cards || []);
-      } else {
-        if (!supabase) return;
-        const results = await Promise.all([
-          supabase
-            .from("organizations")
-            .select("*")
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("contacts")
-            .select("*")
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("meeting_reports")
-            .select("*")
-            .order("meeting_date", { ascending: false }),
-          supabase.from("kanban_stages").select("*").order("position"),
-          supabase.from("kanban_cards").select("*").order("position"),
-        ]);
-        const failed = results.find((r) => r.error);
-        if (failed) throw new Error(failed.error.message);
-        setOrgs(results[0].data || []);
-        setContacts(results[1].data || []);
-        setReports(results[2].data || []);
-        let dbStages = results[3].data || [];
-        if (!dbStages.length) {
-          const rows = defaultStages.map((s, i) => ({
-            placement_manager_id: user.id,
-            name: s.name,
-            color: s.color,
-            position: i,
-          }));
-          const created = await supabase
-            .from("kanban_stages")
-            .insert(rows)
-            .select();
-          dbStages = created.data || [];
-        }
-        setStages(dbStages);
-        setCards(results[4].data || []);
       }
       setLoaded(true);
     } catch (e) {
@@ -520,77 +405,53 @@ function Workspace({ role, user, profile, onLogout }) {
   };
   const refreshManagers = async () => {
     try {
-      if (isApiConfigured) setManagers(await apiFetch("/api/admin/managers"));
-      else if (supabase) {
-        const { data, error: e } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("role", "placement_manager")
-          .order("created_at", { ascending: false });
-        if (e) throw new Error(e.message);
-        setManagers(data || []);
+      if (superAdmin) {
+        const [u, people] = await Promise.all([apiFetch("/api/admin/universities"), apiFetch("/api/admin/users")]);
+        setUniversities(u || []);
+        setManagers(people || []);
+      } else if (supervisor || universityAdmin) {
+        const teamRequests = [apiFetch("/api/team/users"), apiFetch("/api/team/overview")];
+        if (universityAdmin) {
+          teamRequests.push(
+            apiFetch("/api/organizations"),
+            apiFetch("/api/contacts"),
+            apiFetch("/api/meeting-reports"),
+          );
+        }
+        const [people, summary, universityOrgs, universityContacts, universityReports] = await Promise.all(teamRequests);
+        setManagers(people || []);
+        setTeamSummary(summary);
+        if (universityAdmin) {
+          setOrgs(universityOrgs || []);
+          setContacts(universityContacts || []);
+          setReports(universityReports || []);
+        }
       }
+      setLoaded(true);
     } catch (e) {
       setError(e.message);
     }
   };
   useEffect(() => {
-    if (isSupabaseConfigured) {
-      if (admin) refreshManagers();
-      else refresh();
-    }
-  }, [admin, user?.id]);
-  useEffect(() => {
-    if (!supabase || admin || isApiConfigured) return;
-    const ch = supabase
-      .channel("kanban-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "kanban_cards",
-          filter: `placement_manager_id=eq.${user?.id}`,
-        },
-        refresh,
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [admin, user?.id]);
+    if (superAdmin || supervisor || universityAdmin) refreshManagers();
+    else if (placementManager) refresh();
+  }, [role, user?.id]);
   const orgName = (id) =>
     orgs.find((o) => String(o.id) === String(id))?.name || "Unlinked";
   const save = async (table, payload, setter, prepend = false) => {
     setBusy(true);
     try {
-      if (isApiConfigured) {
-        const path = {
-          organizations: "/api/organizations",
-          contacts: "/api/contacts",
-          meeting_reports: "/api/meeting-reports",
-          kanban_cards: "/api/kanban/cards",
-        }[table];
-        const data = await apiFetch(path, {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        setter((prev) => (prepend ? [data, ...prev] : [...prev, data]));
-      } else if (!supabase) {
-        setter((prev) =>
-          prepend
-            ? [{ ...payload, id: Date.now() }, ...prev]
-            : [...prev, { ...payload, id: Date.now() }],
-        );
-      } else {
-        const { data, error: e } = await supabase
-          .from(table)
-          .insert({ ...payload, placement_manager_id: user.id })
-          .select()
-          .single();
-        if (e) throw new Error(e.message);
-        setter((prev) => (prepend ? [data, ...prev] : [...prev, data]));
-      }
+      const path = {
+        organizations: "/api/organizations",
+        contacts: "/api/contacts",
+        meeting_reports: "/api/meeting-reports",
+        kanban_cards: "/api/kanban/cards",
+      }[table];
+      const data = await apiFetch(path, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setter((prev) => (prepend ? [data, ...prev] : [...prev, data]));
       setModal(null);
     } catch (e) {
       setError(e.message);
@@ -601,20 +462,46 @@ function Workspace({ role, user, profile, onLogout }) {
   const addOrg = (e) => {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
-    save(
-      "organizations",
-      {
-        name: f.get("name"),
-        relationship_type: workspaceMode,
-        expected_ctc: workspaceMode === "company" ? f.get("expected_ctc") : null,
-        industry: f.get("industry"),
-        city: f.get("city"),
-        website: f.get("website"),
-        status: f.get("status"),
-        notes: f.get("notes"),
-      },
-      setOrgs,
-    );
+    const payload = {
+      name: f.get("name"),
+      expected_ctc: f.get("expected_ctc"),
+      industry: f.get("industry"),
+      city: f.get("city"),
+      website: f.get("website"),
+      status: f.get("status"),
+      notes: f.get("notes"),
+    };
+    setBusy(true);
+    apiFetch("/api/organizations", { method: "POST", body: JSON.stringify(payload) })
+      .then((data) => {
+        setOrgs((prev) => [...prev, data]);
+        setDuplicateOrg(null);
+        setModal(null);
+      })
+      .catch((err) => {
+        if (err.status === 409 && err.payload?.code === "duplicate_organization") {
+          setDuplicateOrg(payload);
+          setError("");
+        } else setError(err.message);
+      })
+      .finally(() => setBusy(false));
+  };
+  const confirmDuplicateOrg = async () => {
+    if (!duplicateOrg) return;
+    setBusy(true);
+    try {
+      const data = await apiFetch("/api/organizations", {
+        method: "POST",
+        body: JSON.stringify({ ...duplicateOrg, allow_duplicate: true }),
+      });
+      setOrgs((prev) => [...prev, data]);
+      setDuplicateOrg(null);
+      setModal(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   };
   const addContact = (e) => {
     e.preventDefault();
@@ -654,19 +541,11 @@ function Workspace({ role, user, profile, onLogout }) {
     }
     setBusy(true);
     try {
-      if (isApiConfigured) {
-        const data = await apiFetch(
-          `/api/meeting-reports/${editingReport.id}`,
-          { method: "PATCH", body: JSON.stringify(payload) },
-        );
-        setReports((prev) => prev.map((r) => (r.id === data.id ? data : r)));
-      } else {
-        setReports((prev) =>
-          prev.map((r) =>
-            r.id === editingReport.id ? { ...r, ...payload } : r,
-          ),
-        );
-      }
+      const data = await apiFetch(`/api/meeting-reports/${editingReport.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      setReports((prev) => prev.map((r) => (r.id === data.id ? data : r)));
       setModal(null);
       setEditingReport(null);
     } catch (err) {
@@ -692,22 +571,10 @@ function Workspace({ role, user, profile, onLogout }) {
     }
     setBusy(true);
     try {
-      let data = { ...editingCard, ...payload };
-      if (isApiConfigured) {
-        data = await apiFetch(`/api/kanban/cards/${editingCard.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-        });
-      } else if (supabase) {
-        const { data: updated, error: e } = await supabase
-          .from("kanban_cards")
-          .update({ ...payload, updated_at: new Date().toISOString() })
-          .eq("id", editingCard.id)
-          .select()
-          .single();
-        if (e) throw new Error(e.message);
-        data = updated;
-      }
+      const data = await apiFetch(`/api/kanban/cards/${editingCard.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
       setCards((prev) => prev.map((card) => (card.id === data.id ? data : card)));
       setModal(null);
       setEditingCard(null);
@@ -721,15 +588,7 @@ function Workspace({ role, user, profile, onLogout }) {
     if (!window.confirm("Delete this organization and its linked contacts?"))
       return;
     try {
-      if (isApiConfigured)
-        await apiFetch(`/api/organizations/${id}`, { method: "DELETE" });
-      else if (supabase) {
-        const { error: e } = await supabase
-          .from("organizations")
-          .delete()
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
+      await apiFetch(`/api/organizations/${id}`, { method: "DELETE" });
       setOrgs((prev) => prev.filter((x) => x.id !== id));
       setContacts((prev) => prev.filter((contact) => String(contact.organization_id) !== String(id)));
       setReports((prev) => prev.filter((report) => String(report.organization_id) !== String(id)));
@@ -746,15 +605,7 @@ function Workspace({ role, user, profile, onLogout }) {
     if (!window.confirm("Delete this meeting report and its action items?"))
       return;
     try {
-      if (isApiConfigured)
-        await apiFetch(`/api/meeting-reports/${id}`, { method: "DELETE" });
-      else if (supabase) {
-        const { error: e } = await supabase
-          .from("meeting_reports")
-          .delete()
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
+      await apiFetch(`/api/meeting-reports/${id}`, { method: "DELETE" });
       setReports((prev) => prev.filter((x) => x.id !== id));
     } catch (e) {
       setError(e.message);
@@ -789,19 +640,11 @@ function Workspace({ role, user, profile, onLogout }) {
       prev.map((c) => (String(c.id) === String(id) ? { ...c, stage_id } : c)),
     );
     try {
-      if (isApiConfigured) {
-        const data = await apiFetch(`/api/kanban/cards/${id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ stage_id }),
-        });
-        setCards((prev) => prev.map((card) => (card.id === data.id ? data : card)));
-      } else if (supabase) {
-        const { error: e } = await supabase
-          .from("kanban_cards")
-          .update({ stage_id, updated_at: new Date().toISOString() })
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
+      const data = await apiFetch(`/api/kanban/cards/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ stage_id }),
+      });
+      setCards((prev) => prev.map((card) => (card.id === data.id ? data : card)));
     } catch (e) {
       setError(e.message);
       refresh();
@@ -810,15 +653,7 @@ function Workspace({ role, user, profile, onLogout }) {
   const deleteCard = async (id) => {
     if (!window.confirm("Delete this pipeline card permanently?")) return;
     try {
-      if (isApiConfigured) {
-        await apiFetch(`/api/kanban/cards/${id}`, { method: "DELETE" });
-      } else if (supabase) {
-        const { error: e } = await supabase
-          .from("kanban_cards")
-          .delete()
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
+      await apiFetch(`/api/kanban/cards/${id}`, { method: "DELETE" });
       setCards((prev) => prev.filter((card) => card.id !== id));
     } catch (e) {
       setError(e.message);
@@ -835,33 +670,10 @@ function Workspace({ role, user, profile, onLogout }) {
     };
     setBusy(true);
     try {
-      let data;
-      if (isApiConfigured) {
-        data = await apiFetch(
-          editingStage
-            ? `/api/kanban/stages/${editingStage.id}`
-            : "/api/kanban/stages",
-          { method: editingStage ? "PATCH" : "POST", body: JSON.stringify(payload) },
-        );
-      } else if (supabase) {
-        const query = editingStage
-          ? supabase
-              .from("kanban_stages")
-              .update(payload)
-              .eq("id", editingStage.id)
-              .select()
-              .single()
-          : supabase
-              .from("kanban_stages")
-              .insert({ ...payload, placement_manager_id: user.id })
-              .select()
-              .single();
-        const result = await query;
-        if (result.error) throw new Error(result.error.message);
-        data = result.data;
-      } else {
-        data = { ...payload, id: editingStage?.id || Date.now() };
-      }
+      const data = await apiFetch(
+        editingStage ? `/api/kanban/stages/${editingStage.id}` : "/api/kanban/stages",
+        { method: editingStage ? "PATCH" : "POST", body: JSON.stringify(payload) },
+      );
       setStages((prev) =>
         editingStage
           ? prev.map((stage) => (stage.id === data.id ? data : stage))
@@ -878,15 +690,7 @@ function Workspace({ role, user, profile, onLogout }) {
   const deleteStage = async (stage) => {
     if (!window.confirm(`Delete the ${stage.name} stage? It must be empty.`)) return false;
     try {
-      if (isApiConfigured) {
-        await apiFetch(`/api/kanban/stages/${stage.id}`, { method: "DELETE" });
-      } else if (supabase) {
-        const { error: e } = await supabase
-          .from("kanban_stages")
-          .delete()
-          .eq("id", stage.id);
-        if (e) throw new Error(e.message);
-      }
+      await apiFetch(`/api/kanban/stages/${stage.id}`, { method: "DELETE" });
       setStages((prev) => prev.filter((item) => item.id !== stage.id));
       return true;
     } catch (e) {
@@ -896,17 +700,8 @@ function Workspace({ role, user, profile, onLogout }) {
   };
   const deactivate = async (id) => {
     try {
-      if (isApiConfigured)
-        await apiFetch(`/api/admin/managers/${id}/deactivate`, {
-          method: "PATCH",
-        });
-      else if (supabase) {
-        const { error: e } = await supabase
-          .from("profiles")
-          .update({ status: "inactive" })
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
+      const path = superAdmin ? `/api/admin/users/${id}` : `/api/team/users/${id}`;
+      await apiFetch(path, { method: "PATCH", body: JSON.stringify({ status: "inactive" }) });
       setManagers((prev) =>
         prev.map((m) => (m.id === id ? { ...m, status: "inactive" } : m)),
       );
@@ -914,27 +709,19 @@ function Workspace({ role, user, profile, onLogout }) {
       setError(e.message);
     }
   };
-  const deleteManager = async (id) => {
-    if (
-      !window.confirm(
-        "Delete this placement manager and their account permanently?",
-      )
-    )
-      return;
+  const reactivate = async (id) => {
     try {
-      if (isApiConfigured)
-        await apiFetch(`/api/admin/managers/${id}`, { method: "DELETE" });
-      else if (supabase) {
-        const { error: e } = await supabase
-          .from("profiles")
-          .delete()
-          .eq("id", id);
-        if (e) throw new Error(e.message);
-      }
-      setManagers((prev) => prev.filter((m) => m.id !== id));
+      const path = superAdmin ? `/api/admin/users/${id}` : `/api/team/users/${id}`;
+      await apiFetch(path, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+      setManagers((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, status: "active" } : m)),
+      );
     } catch (e) {
       setError(e.message);
     }
+  };
+  const deleteManager = async (id) => {
+    await deactivate(id);
   };
   const addManager = async (e) => {
     e.preventDefault();
@@ -945,32 +732,12 @@ function Workspace({ role, user, profile, onLogout }) {
         email: f.get("email"),
         full_name: f.get("full_name"),
         password: f.get("password"),
+        role: f.get("role") || "placement_manager",
+        university_id: f.get("university_id") || null,
       };
-      if (isApiConfigured) {
-        await apiFetch("/api/admin/managers/invite", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        await refreshManagers();
-      } else if (!supabase) {
-        setManagers((prev) => [
-          {
-            id: Date.now(),
-            name: payload.full_name,
-            email: payload.email,
-            status: "active",
-            created_at: new Date().toISOString(),
-          },
-          ...prev,
-        ]);
-      } else {
-        const { error: e2 } = await supabase.functions.invoke(
-          "invite-placement-manager",
-          { body: payload },
-        );
-        if (e2) throw new Error(e2.message);
-        await refreshManagers();
-      }
+      const endpoint = superAdmin ? "/api/admin/users" : "/api/team/users";
+      await apiFetch(endpoint, { method: "POST", body: JSON.stringify(payload) });
+      await refreshManagers();
       setModal(null);
     } catch (err) {
       setError(err.message);
@@ -978,7 +745,78 @@ function Workspace({ role, user, profile, onLogout }) {
       setBusy(false);
     }
   };
-  if (!loaded && !admin)
+  const updateManager = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    setBusy(true);
+    try {
+      const payload = {
+        full_name: f.get("full_name"),
+        email: f.get("email"),
+      };
+      if (f.get("password")) payload.password = f.get("password");
+      await apiFetch(`/api/team/users/${editingUser.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      await refreshManagers();
+      setModal(null);
+      setEditingUser(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeManager = async (user) => {
+    if (!window.confirm(`Remove ${user.full_name} from your team?`)) return;
+    try {
+      await apiFetch(`/api/team/users/${user.id}`, { method: "DELETE" });
+      setManagers((prev) => prev.filter((member) => member.id !== user.id));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const addUniversity = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    setBusy(true);
+    try {
+      const data = await apiFetch("/api/admin/universities", {
+        method: "POST",
+        body: JSON.stringify({
+          name: f.get("name"),
+          code: f.get("code") || null,
+          city: f.get("city"),
+        }),
+      });
+      setUniversities((prev) => [data, ...prev]);
+      setModal(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const changePassword = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    if (f.get("new_password") !== f.get("confirm_password")) {
+      setError("New passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiFetch("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ current_password: f.get("current_password"), new_password: f.get("new_password") }),
+      });
+      setModal(null);
+      onLogout();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!loaded)
     return (
       <div className="loading-screen">
         <Loader2 className="spin" /> Loading workspace…
@@ -986,61 +824,66 @@ function Workspace({ role, user, profile, onLogout }) {
     );
   const content =
     active === "Overview" ? (
-      <Overview
-        admin={admin}
-        mode={workspaceMode}
-        orgs={visibleOrgs}
-        contacts={visibleContacts}
-        reports={visibleReports}
-        cards={cards}
-        visibleCards={visibleCards}
-        stages={stages}
-        managers={managers}
-      />
-    ) : admin && active === "Placement Managers" ? (
-      <Managers
-        managers={managers}
-        onAdd={() => setModal("manager")}
-        onDeactivate={deactivate}
-        onDelete={deleteManager}
-      />
-    ) : admin ? (
-      <SettingsPage />
+      superAdmin ? (
+        <PlatformOverview universities={universities} users={managers} />
+      ) : supervisor || universityAdmin ? (
+        <TeamDashboard summary={teamSummary} masked={supervisor} />
+      ) : (
+        <Overview
+          admin={false}
+          mode={mode}
+          orgs={visibleOrgs}
+          contacts={visibleContacts}
+          reports={visibleReports}
+          cards={cards}
+          visibleCards={visibleCards}
+          stages={stages}
+          managers={managers}
+        />
+      )
+    ) : superAdmin && active === "Universities" ? (
+      <UniversityDirectory universities={universities} onAdd={() => setModal("university")} />
+    ) : superAdmin && active === "Users" ? (
+      <RoleUsers users={managers} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} />
+    ) : (universityAdmin || supervisor) && active === "Team" ? (
+      <RoleUsers users={managers} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} masked={supervisor} />
     ) : active === organizationNav ? (
       <Organizations
         orgs={visibleOrgs}
-        mode={workspaceMode}
+        mode={mode}
         query={query}
         setQuery={setQuery}
-        onAdd={() => setModal("org")}
+        onAdd={placementManager ? () => setModal("org") : undefined}
         onDelete={deleteOrg}
+        canEdit={placementManager}
       />
     ) : active === peopleNav ? (
       <Contacts
         contacts={visibleContacts}
         organizations={visibleOrgs}
-        mode={workspaceMode}
+        mode={mode}
         orgName={orgName}
         query={query}
         setQuery={setQuery}
-        onAdd={() => setModal("contact")}
+        onAdd={placementManager ? () => setModal("contact") : undefined}
+        canEdit={placementManager}
       />
     ) : active === "Meeting Reports" ? (
       <Reports
         reports={visibleReports}
-        mode={workspaceMode}
+        mode={mode}
         orgName={orgName}
         organizations={visibleOrgs}
-        onAdd={() => {
+        onAdd={placementManager ? () => {
           setEditingReport(null);
           setModal("report");
-        }}
-        onEdit={(r) => {
+        } : undefined}
+        onEdit={placementManager ? (r) => {
           setEditingReport(r);
           setModal("report");
-        }}
-        onDelete={deleteReport}
-        onToggleAction={toggleAction}
+        } : undefined}
+        onDelete={placementManager ? deleteReport : undefined}
+        onToggleAction={placementManager ? toggleAction : undefined}
       />
     ) : (
       <Kanban
@@ -1069,13 +912,13 @@ function Workspace({ role, user, profile, onLogout }) {
       />
     );
   return (
-    <div className={`app-shell workspace-${workspaceMode}`}>
+    <div className="app-shell workspace-company">
       <aside>
         <div className="brand">
           <div className="brand-mark">P</div>
           <div>
             <strong>
-              Placement<span>CRM</span>
+              Vextra<span>AI</span>
             </strong>
             <small>RELATIONSHIP OS</small>
           </div>
@@ -1093,7 +936,7 @@ function Workspace({ role, user, profile, onLogout }) {
             >
               {n === "Overview" ? (
                 <LayoutDashboard size={18} />
-              ) : n === "Placement Managers" ? (
+              ) : n === "Placement Managers" || n === "Users" || n === "Team" ? (
                 <Users size={18} />
               ) : n === "Organizations" || n === "Universities" ? (
                 <Building2 size={18} />
@@ -1120,31 +963,14 @@ function Workspace({ role, user, profile, onLogout }) {
         <header>
           <div>
             <p className="eyebrow">
-              {admin ? "ADMIN CONSOLE" : "PLACEMENT MANAGER"}
+              {superAdmin ? "VEXTRA AI ADMIN" : universityAdmin ? "UNIVERSITY ADMIN" : supervisor ? "TEAM OPERATIONS" : "PLACEMENT MANAGER"}
             </p>
             <h1>{active}</h1>
           </div>
           <div className="header-actions">
-            {!admin && (
-              <div className="workspace-toggle" role="group" aria-label="Workspace type">
-                {Object.entries(workspaceCopy).map(([key, item]) => (
-                  <button
-                    type="button"
-                    key={key}
-                    className={workspaceMode === key ? "active" : ""}
-                    onClick={() => switchWorkspace(key)}
-                    aria-pressed={workspaceMode === key}
-                  >
-                    {item.toggle}
-                  </button>
-                ))}
-              </div>
-            )}
             <div className="top-user">
               <div className="avatar">
-                {admin
-                  ? "AD"
-                  : (profile?.full_name || "PM")
+                {(profile?.full_name || "EA")
                       .split(" ")
                       .map((x) => x[0])
                       .join("")
@@ -1152,13 +978,11 @@ function Workspace({ role, user, profile, onLogout }) {
               </div>
               <div>
                 <b>
-                  {admin
-                    ? profile?.full_name || "Admin User"
-                    : profile?.full_name || "Placement Manager"}
+                  {profile?.full_name || "Vextra AI User"}
                 </b>
-                <small>{admin ? "Administrator" : "Placement Manager"}</small>
+                <small>{role.replaceAll("_", " ")}</small>
               </div>
-              <button className="icon-btn">
+              <button className="icon-btn" title="Change password" onClick={() => setModal("password")}>
                 <MoreHorizontal size={20} />
               </button>
             </div>
@@ -1177,7 +1001,7 @@ function Workspace({ role, user, profile, onLogout }) {
         </section>
       </main>
       {modal === "org" && (
-        <Modal title={`Add ${copy.organization.toLowerCase()}`} onClose={() => setModal(null)}>
+        <Modal title={`Add ${copy.organization.toLowerCase()}`} onClose={() => { setModal(null); setDuplicateOrg(null); }}>
           <form onSubmit={addOrg}>
             <Field
               label={`${copy.organization} name`}
@@ -1192,13 +1016,11 @@ function Workspace({ role, user, profile, onLogout }) {
               />
               <Field label="City" name="city" placeholder="Bengaluru" />
             </div>
-            {workspaceMode === "company" && (
-              <Field
-                label="Expected CTC"
-                name="expected_ctc"
-                placeholder="e.g. 8 LPA or ₹8–10 LPA"
-              />
-            )}
+            <Field
+              label="Expected CTC"
+              name="expected_ctc"
+              placeholder="e.g. 8 LPA or ₹8–10 LPA"
+            />
             <div className="form-grid">
               <Field label="Website" name="website" placeholder="acme.com" />
               <Select label="Status" name="status">
@@ -1216,6 +1038,16 @@ function Workspace({ role, user, profile, onLogout }) {
                 placeholder="Relationship context..."
               />
             </label>
+            {duplicateOrg && (
+              <div className="warning-banner">
+                <b>Possible duplicate organization</b>
+                <p>This organization already exists under your university. Coordinate with the existing team before continuing.</p>
+                <div className="form-actions">
+                  <button type="button" className="btn secondary" onClick={() => setDuplicateOrg(null)}>Review details</button>
+                  <button type="button" className="btn primary" onClick={confirmDuplicateOrg} disabled={busy}>Continue anyway</button>
+                </div>
+              </div>
+            )}
             <FormActions onClose={() => setModal(null)} busy={busy} />
           </form>
         </Modal>
@@ -1228,7 +1060,7 @@ function Workspace({ role, user, profile, onLogout }) {
               <Field
                 label={copy.role}
                 name="designation"
-                placeholder={workspaceMode === "university" ? "Professor" : "HR Manager"}
+                placeholder="HR Manager"
               />
             </div>
             <Select label={copy.organization} name="organization_id">
@@ -1462,8 +1294,8 @@ function Workspace({ role, user, profile, onLogout }) {
           </form>
         </Modal>
       )}
-      {modal === "manager" && (
-        <Modal title="Add placement manager" onClose={() => setModal(null)}>
+      {modal === "user" && (
+        <Modal title="Add team member" onClose={() => setModal(null)}>
           <form onSubmit={addManager}>
             <Field
               label="Full name"
@@ -1483,15 +1315,117 @@ function Workspace({ role, user, profile, onLogout }) {
               minLength="8"
               placeholder="Minimum 8 characters"
             />
+            <Select label="Role" name="role" defaultValue={superAdmin ? "university_admin" : supervisor ? "placement_manager" : "coordinator"}>
+              {superAdmin ? (
+                <option value="university_admin">University administrator</option>
+              ) : (
+                <>
+                  {universityAdmin && <option value="coordinator">Coordinator</option>}
+                  {universityAdmin && <option value="regional_manager">Regional manager</option>}
+                  {(universityAdmin || role === "coordinator") && <option value="placement_manager">Placement manager</option>}
+                  {role === "coordinator" && <option value="regional_manager">Regional manager</option>}
+                </>
+              )}
+            </Select>
+            {superAdmin && (
+              <Select label="University" name="university_id">
+                <option value="">Choose university</option>
+                {universities.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </Select>
+            )}
             <p className="muted">
-              The account is created directly. No email is sent.
+              The account is created directly. No email is sent; share the initial password securely.
             </p>
+            <FormActions onClose={() => setModal(null)} busy={busy} />
+          </form>
+        </Modal>
+      )}
+      {modal === "edit-user" && editingUser && (
+        <Modal title="Edit team member" onClose={() => { setModal(null); setEditingUser(null); }}>
+          <form onSubmit={updateManager}>
+            <Field label="Full name" name="full_name" defaultValue={editingUser.full_name} />
+            <Field label="Email" type="email" name="email" defaultValue={editingUser.email} />
+            <Field label="New password (optional)" type="password" name="password" minLength="8" required={false} placeholder="Leave blank to keep current password" />
+            <FormActions onClose={() => { setModal(null); setEditingUser(null); }} busy={busy} />
+          </form>
+        </Modal>
+      )}
+      {modal === "university" && (
+        <Modal title="Add university" onClose={() => setModal(null)}>
+          <form onSubmit={addUniversity}>
+            <Field label="University name" name="name" placeholder="VIT University" />
+            <div className="form-grid">
+              <Field label="University code" name="code" placeholder="VIT" required={false} />
+              <Field label="City" name="city" placeholder="Vellore" />
+            </div>
+            <FormActions onClose={() => setModal(null)} busy={busy} />
+          </form>
+        </Modal>
+      )}
+      {modal === "password" && (
+        <Modal title="Change password" onClose={() => setModal(null)}>
+          <form onSubmit={changePassword}>
+            <Field label="Current password" type="password" name="current_password" autoComplete="current-password" />
+            <Field label="New password" type="password" name="new_password" minLength="8" autoComplete="new-password" />
+            <Field label="Confirm new password" type="password" name="confirm_password" minLength="8" autoComplete="new-password" />
             <FormActions onClose={() => setModal(null)} busy={busy} />
           </form>
         </Modal>
       )}
     </div>
   );
+}
+
+function PlatformOverview({ universities, users }) {
+  const activeUniversities = universities.filter((item) => item.status === "active").length;
+  const admins = users.filter((item) => item.role === "university_admin").length;
+  const members = users.filter((item) => item.role !== "super_admin").length;
+  return <>
+    <div className="report-stats">
+      <div className="stat"><span>Universities</span><strong>{universities.length}</strong><small>{activeUniversities} active</small></div>
+      <div className="stat"><span>University admins</span><strong>{admins}</strong><small>Assigned access</small></div>
+      <div className="stat"><span>Team accounts</span><strong>{members}</strong><small>Managed by universities</small></div>
+      <div className="stat"><span>Active accounts</span><strong>{users.filter((item) => item.status === "active").length}</strong><small>Current access</small></div>
+    </div>
+    <div className="toolbar"><div><p className="eyebrow">VEXTRA AI CONTROL PLANE</p><h2>University network</h2><p className="muted">Create university tenants and assign their administrators.</p></div></div>
+  </>;
+}
+
+function TeamDashboard({ summary, masked }) {
+  const totals = summary?.totals || {};
+  const users = summary?.users || [];
+  return <>
+    <div className="report-stats">
+      <div className="stat"><span>Team members</span><strong>{users.length}</strong><small>Under your reporting line</small></div>
+      <div className="stat"><span>Organizations</span><strong>{totals.organizations || 0}</strong><small>{masked ? "Names protected" : "University total"}</small></div>
+      <div className="stat"><span>Contacts</span><strong>{totals.contacts || 0}</strong><small>{masked ? "Details protected" : "University total"}</small></div>
+      <div className="stat"><span>Pipeline cards</span><strong>{totals.cards || 0}</strong><small>Activity being tracked</small></div>
+    </div>
+    <div className="panel table-panel">
+      <div className="table-head"><h3>Team activity</h3><span className="muted">{masked ? "Organization and contact identities are masked." : "University-wide activity overview."}</span></div>
+      <TeamTable users={users} masked={masked} />
+    </div>
+  </>;
+}
+
+function TeamTable({ users, masked }) {
+  return <table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Organizations</th><th>Contacts</th><th>Reports</th><th>Pipeline</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b><small>{item.email}</small></td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.organization_count ?? 0}{masked && <small> masked</small>}</td><td>{item.contact_count ?? 0}{masked && <small> masked</small>}</td><td>{item.report_count ?? 0}</td><td>{item.card_count ?? 0}</td></tr>)}</tbody></table>;
+}
+
+function RoleUsers({ users, onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, masked = false }) {
+  const names = new Map(users.map((item) => [String(item.id), item.full_name]));
+  const canDeactivate = (item) => onDeactivate && (superAdmin || item.role !== "university_admin");
+  return <>
+    <div className="toolbar"><div><p className="eyebrow">ACCESS DIRECTORY</p><h2>{superAdmin ? "All accounts" : "Team members"}</h2><p className="muted">{masked ? "Progress is visible while organization identities remain protected." : "Manage access within your authorized scope."}</p></div>{onAdd && <button className="btn primary" onClick={onAdd}><Plus size={17}/> Add account</button>}</div>
+    <div className="panel table-panel"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b></td><td>{item.email}</td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.reports_to_name || (item.reports_to ? names.get(String(item.reports_to)) || "Assigned manager" : "—")}</td><td><div className="actions">{item.status === "active" && onEdit && <button className="text-btn" onClick={() => onEdit(item)}><Pencil size={13} />Edit</button>}{item.status === "active" && item.role !== "super_admin" && canDeactivate(item) && <button className="delete-btn" onClick={() => onDeactivate(item.id)}>Deactivate</button>}{item.status === "inactive" && item.role !== "super_admin" && onReactivate && <button className="text-btn" onClick={() => onReactivate(item.id)}>Reactivate</button>}{item.status === "active" && onRemove && <button className="delete-btn" onClick={() => onRemove(item)}>Remove</button>}</div></td></tr>)}</tbody></table></div>
+  </>;
+}
+
+function UniversityDirectory({ universities, onAdd }) {
+  return <>
+    <div className="toolbar"><div><p className="eyebrow">TENANT MANAGEMENT</p><h2>Universities</h2><p className="muted">Each university receives its own administrative scope.</p></div><button className="btn primary" onClick={onAdd}><Plus size={17}/> Add university</button></div>
+    <div className="panel table-panel"><table><thead><tr><th>University</th><th>Code</th><th>City</th><th>Status</th><th>Created</th></tr></thead><tbody>{universities.map((item) => <tr key={item.id}><td><b>{item.name}</b></td><td>{item.code || "—"}</td><td>{item.city}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.created_at ? new Date(item.created_at).toLocaleDateString() : "Today"}</td></tr>)}</tbody></table>{!universities.length && <div className="empty-state"><h3>No universities yet</h3><p className="muted">Add the first university tenant to begin.</p></div>}</div>
+  </>;
 }
 
 function Overview({ admin, mode, orgs, contacts, reports, cards, visibleCards, stages, managers }) {
@@ -1640,7 +1574,7 @@ function Toolbar({ query, setQuery, button, onAdd }) {
     </div>
   );
 }
-function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
+function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete, canEdit = true }) {
   const copy = workspaceCopy[mode];
   const [status, setStatus] = useState("");
   const rows = orgs.filter(
@@ -1653,7 +1587,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
       <Toolbar
         query={query}
         setQuery={setQuery}
-        button={`Add ${copy.organization.toLowerCase()}`}
+        button={canEdit ? `Add ${copy.organization.toLowerCase()}` : null}
         onAdd={onAdd}
       />
       <div className="panel table-panel">
@@ -1683,7 +1617,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
               <th>Location</th>
               <th>Status</th>
               <th>Updated</th>
-              <th />
+              {canEdit && <th />}
             </tr>
           </thead>
           <tbody>
@@ -1704,11 +1638,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
                     ? new Date(o.updated_at).toLocaleDateString()
                     : "Today"}
                 </td>
-                <td>
-                  <button className="delete-btn" onClick={() => onDelete(o.id)}>
-                    Delete
-                  </button>
-                </td>
+                {canEdit && <td><button className="delete-btn" onClick={() => onDelete(o.id)}>Delete</button></td>}
               </tr>
             ))}
           </tbody>
@@ -1717,7 +1647,7 @@ function Organizations({ orgs, mode, query, setQuery, onAdd, onDelete }) {
     </>
   );
 }
-function Contacts({ contacts, organizations, mode, orgName, query, setQuery, onAdd }) {
+function Contacts({ contacts, organizations, mode, orgName, query, setQuery, onAdd, canEdit = true }) {
   const copy = workspaceCopy[mode];
   const [organizationFilter, setOrganizationFilter] = useState("");
   const rows = contacts.filter(
@@ -1730,7 +1660,7 @@ function Contacts({ contacts, organizations, mode, orgName, query, setQuery, onA
       <Toolbar
         query={query}
         setQuery={setQuery}
-        button={`Add ${copy.person.toLowerCase()}`}
+        button={canEdit ? `Add ${copy.person.toLowerCase()}` : null}
         onAdd={onAdd}
       />
       <div className="panel table-panel">
@@ -1808,8 +1738,8 @@ function Reports({ reports, mode, orgName, organizations, onAdd, onEdit, onDelet
       <div className="stat"><span>Pending actions</span><strong>{pending}</strong><small>Items to complete</small></div>
       <div className="stat"><span>Overdue follow-ups</span><strong className={overdue ? "danger-number" : ""}>{overdue}</strong><small>Need attention</small></div>
     </div>
-    <div className="toolbar report-toolbar"><div className="search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${copy.person.toLowerCase()} meetings...`}/></div><select className="filter" value={organizationFilter} onChange={(e) => setOrganizationFilter(e.target.value)}><option value="">All {copy.organizations.toLowerCase()}</option>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select><select className="filter" value={range} onChange={(e) => setRange(e.target.value)}><option value="all">All dates</option><option value="this_week">This week</option><option value="this_month">This month</option><option value="overdue">Overdue follow-ups</option></select><select className="filter" value={sort} onChange={(e) => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select><button className="btn primary" onClick={onAdd}><Plus size={17}/> New report</button></div>
-    <div className="reports">{filtered.map((r) => { const isOpen = expanded === r.id; const actionItems = r.action_items_list || []; const isOverdue = r.follow_up_date && new Date(r.follow_up_date) < start; return <article className={`report panel ${isOverdue ? "report-overdue" : ""}`} key={r.id}><div className="report-date"><b>{new Date(r.meeting_date).getDate()}</b><span>{new Date(r.meeting_date).toLocaleString("en", {month:"short"}).toUpperCase()}</span></div><div className="report-body"><div className="report-top"><div><h3>{r.title}</h3><p className="muted">{orgName(r.organization_id)} · {r.attendees}</p><div className="report-badges"><span className={`report-badge ${r.outcome || "neutral"}`}>{(r.outcome || "neutral").replaceAll("_", " ")}</span><span className="report-badge">{(r.meeting_type || "video_call").replaceAll("_", " ")}</span>{r.follow_up_date && <span className={`report-badge ${isOverdue ? "overdue" : ""}`}>Follow-up: {r.follow_up_date}</span>}</div></div><div className="report-actions"><button className="text-btn" onClick={() => setExpanded(isOpen ? null : r.id)}>{isOpen ? "Collapse" : "Details"}</button><button className="text-btn" onClick={() => onEdit(r)}>Edit</button><button className="delete-btn" onClick={() => onDelete(r.id)}>Delete</button></div></div><p>{r.summary}</p>{isOpen && <div className="report-details"><div><b>Attendees</b><p>{r.attendees}</p></div><div><b>Action items</b>{actionItems.length ? actionItems.map((a) => <label className={`action-check ${a.is_completed ? "completed" : ""}`} key={a.id}><input type="checkbox" checked={a.is_completed} onChange={(e) => onToggleAction(r.id, a.id, e.target.checked)}/><span>{a.text}</span></label>) : <p>{r.action_items || "No action items."}</p>}</div></div>}<div className="action"><b>{actionItems.length ? `${actionItems.filter((a) => !a.is_completed).length} pending action${actionItems.filter((a) => !a.is_completed).length === 1 ? "" : "s"}` : "Next action"}</b><span>{r.action_items || "Open details to review action items."}</span></div></div></article>})}</div>{!filtered.length && <div className="empty-state panel"><h3>No meeting reports found</h3><p className="muted">Try changing your filters or create a new report.</p></div>}
+    <div className="toolbar report-toolbar"><div className="search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${copy.person.toLowerCase()} meetings...`}/></div><select className="filter" value={organizationFilter} onChange={(e) => setOrganizationFilter(e.target.value)}><option value="">All {copy.organizations.toLowerCase()}</option>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select><select className="filter" value={range} onChange={(e) => setRange(e.target.value)}><option value="all">All dates</option><option value="this_week">This week</option><option value="this_month">This month</option><option value="overdue">Overdue follow-ups</option></select><select className="filter" value={sort} onChange={(e) => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select>{onAdd && <button className="btn primary" onClick={onAdd}><Plus size={17}/> New report</button>}</div>
+    <div className="reports">{filtered.map((r) => { const isOpen = expanded === r.id; const actionItems = r.action_items_list || []; const isOverdue = r.follow_up_date && new Date(r.follow_up_date) < start; return <article className={`report panel ${isOverdue ? "report-overdue" : ""}`} key={r.id}><div className="report-date"><b>{new Date(r.meeting_date).getDate()}</b><span>{new Date(r.meeting_date).toLocaleString("en", {month:"short"}).toUpperCase()}</span></div><div className="report-body"><div className="report-top"><div><h3>{r.title}</h3><p className="muted">{orgName(r.organization_id)} · {r.attendees}</p><div className="report-badges"><span className={`report-badge ${r.outcome || "neutral"}`}>{(r.outcome || "neutral").replaceAll("_", " ")}</span><span className="report-badge">{(r.meeting_type || "video_call").replaceAll("_", " ")}</span>{r.follow_up_date && <span className={`report-badge ${isOverdue ? "overdue" : ""}`}>Follow-up: {r.follow_up_date}</span>}</div></div><div className="report-actions"><button className="text-btn" onClick={() => setExpanded(isOpen ? null : r.id)}>{isOpen ? "Collapse" : "Details"}</button>{onEdit && <button className="text-btn" onClick={() => onEdit(r)}>Edit</button>}{onDelete && <button className="delete-btn" onClick={() => onDelete(r.id)}>Delete</button>}</div></div><p>{r.summary}</p>{isOpen && <div className="report-details"><div><b>Attendees</b><p>{r.attendees}</p></div><div><b>Action items</b>{actionItems.length ? actionItems.map((a) => <label className={`action-check ${a.is_completed ? "completed" : ""}`} key={a.id}><input type="checkbox" checked={a.is_completed} disabled={!onToggleAction} onChange={onToggleAction ? (e) => onToggleAction(r.id, a.id, e.target.checked) : undefined}/><span>{a.text}</span></label>) : <p>{r.action_items || "No action items."}</p>}</div></div>}<div className="action"><b>{actionItems.length ? `${actionItems.filter((a) => !a.is_completed).length} pending action${actionItems.filter((a) => !a.is_completed).length === 1 ? "" : "s"}` : "Next action"}</b><span>{r.action_items || "Open details to review action items."}</span></div></div></article>})}</div>{!filtered.length && <div className="empty-state panel"><h3>No meeting reports found</h3><p className="muted">Try changing your filters or create a new report.</p></div>}
   </>;
 }
 function Kanban({
@@ -1941,7 +1871,7 @@ function Kanban({
     </>
   );
 }
-function Managers({ managers, onAdd, onDeactivate, onDelete }) {
+function Managers({ managers, onAdd, onDeactivate, onReactivate, onDelete }) {
   const [status, setStatus] = useState("");
   const rows = managers.filter((m) => !status || m.status === status);
   return (
@@ -2009,6 +1939,14 @@ function Managers({ managers, onAdd, onDeactivate, onDelete }) {
                       onClick={() => onDeactivate(m.id)}
                     >
                       Deactivate
+                    </button>
+                  )}
+                  {m.status === "inactive" && onReactivate && (
+                    <button
+                      className="text-btn"
+                      onClick={() => onReactivate(m.id)}
+                    >
+                      Reactivate
                     </button>
                   )}
                   <button className="delete-btn" onClick={() => onDelete(m.id)}>

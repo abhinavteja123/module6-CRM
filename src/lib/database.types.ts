@@ -10,13 +10,47 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.15"
+    PostgrestVersion: "14.17"
   }
   public: {
     Tables: {
+      auth_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          refresh_token_hash: string
+          revoked_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          id?: string
+          refresh_token_hash: string
+          revoked_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          refresh_token_hash?: string
+          revoked_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "auth_sessions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contacts: {
         Row: {
-          completed_at: string | null
           created_at: string
           designation: string | null
           email: string | null
@@ -29,7 +63,6 @@ export type Database = {
           placement_manager_id: string
         }
         Insert: {
-          completed_at?: string | null
           created_at?: string
           designation?: string | null
           email?: string | null
@@ -42,7 +75,6 @@ export type Database = {
           placement_manager_id: string
         }
         Update: {
-          completed_at?: string | null
           created_at?: string
           designation?: string | null
           email?: string | null
@@ -73,6 +105,7 @@ export type Database = {
       }
       kanban_cards: {
         Row: {
+          completed_at: string | null
           created_at: string
           description: string | null
           due_date: string | null
@@ -86,6 +119,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          completed_at?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
@@ -99,6 +133,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          completed_at?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
@@ -289,42 +324,45 @@ export type Database = {
         Row: {
           city: string | null
           created_at: string
+          expected_ctc: string | null
           id: string
           industry: string | null
           name: string
           notes: string | null
           placement_manager_id: string
-          expected_ctc: string | null
           relationship_type: string
           status: Database["public"]["Enums"]["organization_status"]
+          university_id: string | null
           updated_at: string
           website: string | null
         }
         Insert: {
           city?: string | null
           created_at?: string
+          expected_ctc?: string | null
           id?: string
           industry?: string | null
           name: string
           notes?: string | null
           placement_manager_id: string
-          expected_ctc?: string | null
           relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
+          university_id?: string | null
           updated_at?: string
           website?: string | null
         }
         Update: {
           city?: string | null
           created_at?: string
+          expected_ctc?: string | null
           id?: string
           industry?: string | null
           name?: string
           notes?: string | null
           placement_manager_id?: string
-          expected_ctc?: string | null
           relationship_type?: string
           status?: Database["public"]["Enums"]["organization_status"]
+          university_id?: string | null
           updated_at?: string
           website?: string | null
         }
@@ -332,6 +370,48 @@ export type Database = {
           {
             foreignKeyName: "organizations_placement_manager_id_fkey"
             columns: ["placement_manager_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organizations_university_id_fkey"
+            columns: ["university_id"]
+            isOneToOne: false
+            referencedRelation: "universities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      password_reset_requests: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          token_hash: string
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          id?: string
+          token_hash: string
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          token_hash?: string
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "password_reset_requests_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -344,24 +424,87 @@ export type Database = {
           email: string
           full_name: string
           id: string
-          role: Database["public"]["Enums"]["user_role"]
+          last_login_at: string | null
+          must_change_password: boolean
+          password_hash: string | null
+          reports_to: string | null
+          role: string
           status: Database["public"]["Enums"]["profile_status"]
+          university_id: string | null
         }
         Insert: {
           created_at?: string
           email: string
           full_name: string
           id: string
-          role?: Database["public"]["Enums"]["user_role"]
+          last_login_at?: string | null
+          must_change_password?: boolean
+          password_hash?: string | null
+          reports_to?: string | null
+          role?: string
           status?: Database["public"]["Enums"]["profile_status"]
+          university_id?: string | null
         }
         Update: {
           created_at?: string
           email?: string
           full_name?: string
           id?: string
-          role?: Database["public"]["Enums"]["user_role"]
+          last_login_at?: string | null
+          must_change_password?: boolean
+          password_hash?: string | null
+          reports_to?: string | null
+          role?: string
           status?: Database["public"]["Enums"]["profile_status"]
+          university_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_reports_to_fkey"
+            columns: ["reports_to"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "profiles_university_id_fkey"
+            columns: ["university_id"]
+            isOneToOne: false
+            referencedRelation: "universities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      universities: {
+        Row: {
+          city: string | null
+          code: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          city?: string | null
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          city?: string | null
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
+          status?: string
+          updated_at?: string
         }
         Relationships: []
       }

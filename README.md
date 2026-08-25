@@ -9,30 +9,23 @@ npm install
 npm run dev
 ```
 
-The UI runs in demo mode without environment variables. Use the role buttons on the login screen to preview the Placement Manager and Admin experiences. For production, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from `.env.example`, apply the migration, and deploy the Edge Function. When the variables are present, the frontend uses Supabase Auth, Postgres CRUD, RLS, and Realtime automatically.
+The UI uses FastAPI for authentication and all application data access. Supabase is used only as the private PostgreSQL database behind FastAPI. There is no Supabase Auth flow or demo-role shortcut in the frontend.
 
-## Supabase setup
+## Supabase database setup
 
-Apply `supabase/migrations/20260823000000_initial_schema.sql`, then deploy `supabase/functions/invite-placement-manager`. The five PM-owned tables have owner-only policies; admins intentionally have no read policies for PM data.
+Apply the versioned migrations through `20260825000009_remove_legacy_supabase_auth.sql`. The database is private to the FastAPI service-role connection; the browser does not query Supabase directly.
 
-1. Create a Supabase project and copy its URL and anon key into a local `.env` file using `.env.example`.
-2. Apply the migration with Supabase Studio SQL editor or `supabase db push`.
-3. Create the first user in Supabase Authentication, then promote that user once in the SQL editor:
+1. Configure `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`.
+2. Apply all migrations, including `20260825000008_application_auth_and_roles.sql`.
+3. Configure `JWT_SECRET`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` in `backend/.env`.
+4. Start FastAPI, then run `npm run dev` for the frontend.
 
-   ```sql
-   update public.profiles set role = 'admin' where email = 'your-admin@example.com';
-   ```
+The browser never receives the service-role key. The backend enforces tenant and reporting-line scope before querying Supabase. Coordinators and regional managers receive masked organization/contact activity; university administrators can view their university's records; placement managers can write only their own records.
 
-4. Deploy the function with `supabase functions deploy invite-placement-manager`. The function uses the project service-role secret only on the server.
-5. In Supabase Database → Replication, enable `kanban_cards` so Realtime moves are delivered to open workspaces.
-6. Run `npm run dev` for local development or `npm run build && npm run preview` to inspect the production bundle.
+## Role-based workspaces
 
-The browser never receives a service-role key. Admin roster access is limited to `profiles`; the five PM-owned tables have no admin policy and remain database-isolated.
-
-## Company and university workspaces
-
-Placement managers can switch between the Companies and Universities workspaces from the header. Organizations, contacts/professors, meeting reports, and the overview are filtered to the selected workspace. The Kanban board is shared so the same pipeline remains available across both relationship types. Existing organizations are treated as Companies; new records inherit the active workspace.
+The prior Companies/Universities toggle has been removed. The production workspace is company placement CRM only. Vextra AI super admins manage universities and university administrators. University administrators manage coordinators, regional managers, and placement managers. Coordinators and regional managers track team activity without seeing company or contact identities. Placement managers retain the private Organizations, Contacts, Meeting Reports, and Kanban workflow.
 
 ## FastAPI mode
 
-The production architecture uses FastAPI for all application data APIs while Supabase provides Auth and PostgreSQL. Start the backend from `backend/`, copy `backend/.env.example` to `backend/.env`, and set `VITE_API_URL=http://localhost:8000` in the frontend `.env`. The frontend continues to use Supabase Auth to obtain the JWT, then sends that JWT to FastAPI. Do not put `SUPABASE_SERVICE_ROLE_KEY` in the frontend.
+The production architecture uses FastAPI for application JWT authentication and all data APIs while Supabase provides PostgreSQL only. Start the backend from `backend/`, copy `backend/.env.example` to `backend/.env`, and set `VITE_API_URL=http://127.0.0.1:8000` in the frontend `.env`. Never put `SUPABASE_SERVICE_ROLE_KEY` in the frontend.
