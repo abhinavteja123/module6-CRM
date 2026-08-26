@@ -39,9 +39,11 @@ function refreshAccessToken(refreshToken) {
 
 async function request(path, options = {}, token = getAccessToken()) {
   const headers = {
-    "Content-Type": "application/json",
     ...(options.headers || {}),
   };
+  if (options.body !== undefined && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${apiBase}${path}`, { ...options, headers });
   const body = await response.json().catch(() => ({}));

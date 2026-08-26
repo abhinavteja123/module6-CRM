@@ -17,10 +17,13 @@ Apply the versioned migrations through `20260825000009_remove_legacy_supabase_au
 
 1. Configure `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`.
 2. Apply all migrations, including `20260825000008_application_auth_and_roles.sql`.
-3. Configure `JWT_SECRET`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` in `backend/.env`.
-4. Start FastAPI, then run `npm run dev` for the frontend.
+3. Apply `20260826000011_audit_and_notifications.sql` for audit history and in-app notifications.
+4. Configure `JWT_SECRET`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` in `backend/.env`.
+5. Start FastAPI, then run `npm run dev` for the frontend.
 
 The browser never receives the service-role key. The backend enforces tenant and reporting-line scope before querying Supabase. Coordinators and regional managers receive masked organization/contact activity; university administrators can view their university's records; placement managers can write only their own records.
+
+The application also provides a permission-scoped global search at `/api/search`, audit history at `/api/audit`, and in-app notifications at `/api/notifications`. University administrators can read organization activity while personal contact identity fields remain masked.
 
 ## Role-based workspaces
 
