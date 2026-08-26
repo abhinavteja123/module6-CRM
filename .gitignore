@@ -6,3 +6,4 @@ backend/.env
 backend/.venv/
 __pycache__/
 *.pyc
+SESSION_HANDOFF.md
