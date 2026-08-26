@@ -2,7 +2,7 @@ const ACCESS_TOKEN_KEY = "exora_access_token";
 const REFRESH_TOKEN_KEY = "exora_refresh_token";
 let refreshPromise = null;
 
-export const apiBase = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+export const apiBase = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "https://vextra-ai-crm-api.onrender.com" : "http://127.0.0.1:8000");
 export const isApiConfigured = true;
 
 export function getAccessToken() {
