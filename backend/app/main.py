@@ -1117,14 +1117,15 @@ def add_report_names(people: list[dict[str, Any]], university_id: str | None) ->
 
 def team_summary(user: dict[str, Any]) -> dict[str, Any]:
     ids = team_ids(user)
-    people = add_report_names(profile_list_for_user_ids(ids), user.get("university_id"))
+    summary_ids = [user_id for user_id in ids if str(user_id) != str(user["id"])]
+    people = add_report_names(profile_list_for_user_ids(summary_ids), user.get("university_id"))
     if user.get("role") == "university_admin":
         people = [person for person in people if person.get("role") != "university_admin"]
-    orgs = db.table("organizations").select("id,placement_manager_id,name").in_("placement_manager_id", ids).execute().data if ids else []
-    contacts = db.table("contacts").select("id,placement_manager_id,organization_id,name,email,phone").in_("placement_manager_id", ids).execute().data if ids else []
-    reports = db.table("meeting_reports").select("id,placement_manager_id,meeting_date,follow_up_date").in_("placement_manager_id", ids).execute().data if ids else []
-    action_items = db.table("meeting_action_items").select("id,placement_manager_id,is_completed").in_("placement_manager_id", ids).eq("is_completed", False).execute().data if ids else []
-    cards = db.table("kanban_cards").select("id,placement_manager_id,stage_id").in_("placement_manager_id", ids).execute().data if ids else []
+    orgs = db.table("organizations").select("id,placement_manager_id,name").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
+    contacts = db.table("contacts").select("id,placement_manager_id,organization_id,name,email,phone").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
+    reports = db.table("meeting_reports").select("id,placement_manager_id,meeting_date,follow_up_date").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
+    action_items = db.table("meeting_action_items").select("id,placement_manager_id,is_completed").in_("placement_manager_id", summary_ids).eq("is_completed", False).execute().data if summary_ids else []
+    cards = db.table("kanban_cards").select("id,placement_manager_id,stage_id").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
     masked = user.get("role") in {"coordinator", "regional_manager"}
     today = date.today()
     recent_cutoff = today - timedelta(days=30)
@@ -1200,6 +1201,7 @@ def create_university_admin(payload: UserIn, user=Depends(require_roles("super_a
 @app.get("/api/team/users")
 def list_team_users(user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
     people = add_report_names(profile_list_for_user_ids(team_ids(user)), user.get("university_id"))
+    people = [person for person in people if str(person.get("id")) != str(user["id"])]
     if user.get("role") == "university_admin":
         people = [person for person in people if person.get("role") != "university_admin"]
     elif user.get("role") == "coordinator":

@@ -1007,7 +1007,7 @@ function Workspace({ role, user, profile, onLogout }) {
       superAdmin ? (
         <PlatformOverview universities={universities} users={managers} />
       ) : supervisor || universityAdmin ? (
-        <TeamDashboard summary={teamSummary} masked={supervisor} />
+        <TeamDashboard summary={teamSummary} masked={supervisor} excludeUserId={user?.id} />
       ) : (
         <Overview
           admin={false}
@@ -1024,9 +1024,9 @@ function Workspace({ role, user, profile, onLogout }) {
     ) : superAdmin && active === "Universities" ? (
       <UniversityDirectory universities={universities} users={managers} onAdd={() => setModal("university")} onToggleStatus={updateUniversity} />
     ) : superAdmin && active === "Users" ? (
-      <RoleUsers users={managers} universities={universities} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} />
+      <RoleUsers users={managers} universities={universities} currentUserId={user?.id} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} />
     ) : (universityAdmin || supervisor) && active === "Team" ? (
-      <RoleUsers users={teamSummary?.users || managers} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={universityAdmin} masked={supervisor} />
+      <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={universityAdmin} masked={supervisor} />
     ) : active === organizationNav ? (
       <Organizations
         orgs={visibleOrgs}
@@ -1588,9 +1588,9 @@ function PlatformOverview({ universities, users }) {
   </>;
 }
 
-function TeamDashboard({ summary, masked }) {
+function TeamDashboard({ summary, masked, excludeUserId }) {
   const totals = summary?.totals || {};
-  const users = summary?.users || [];
+  const users = (summary?.users || []).filter((item) => !excludeUserId || String(item.id) !== String(excludeUserId));
   return <>
     <div className="report-stats">
       <div className="stat"><span>Team members</span><strong>{users.length}</strong><small>Under your reporting line</small></div>
@@ -1606,10 +1606,10 @@ function TeamDashboard({ summary, masked }) {
 }
 
 function TeamTable({ users, masked }) {
-  return <table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Organizations</th><th>Contacts</th><th>Reports</th><th>Last report</th><th>Follow-ups</th><th>Report tracking</th><th>Pipeline</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b><small>{item.email}</small></td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.organization_count ?? 0}{masked && <small> masked</small>}</td><td>{item.contact_count ?? 0}{masked && <small> masked</small>}</td><td>{item.report_count ?? 0}</td><td>{item.last_report_date ? new Date(item.last_report_date).toLocaleDateString() : "Never"}</td><td><span className={item.overdue_followups ? "danger-number" : ""}>{item.overdue_followups ?? 0} overdue</span><small>{item.pending_actions ?? 0} pending action{item.pending_actions === 1 ? "" : "s"}</small></td><td><span className={`report-status ${String(item.report_status || "").toLowerCase().replaceAll(" ", "-")}`}>{item.report_status || "Not tracked"}</span></td><td>{item.card_count ?? 0}</td></tr>)}</tbody></table>;
+  return <div className="team-table-scroll" role="region" aria-label="Team activity table" tabIndex="0"><table className="team-activity-table"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Organizations</th><th>Contacts</th><th>Reports</th><th>Last report</th><th>Follow-ups</th><th>Report tracking</th><th>Pipeline</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b><small>{item.email}</small></td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.organization_count ?? 0}{masked && <small> masked</small>}</td><td>{item.contact_count ?? 0}{masked && <small> masked</small>}</td><td>{item.report_count ?? 0}</td><td>{item.last_report_date ? new Date(item.last_report_date).toLocaleDateString() : "Never"}</td><td><span className={item.overdue_followups ? "danger-number" : ""}>{item.overdue_followups ?? 0} overdue</span><small>{item.pending_actions ?? 0} pending action{item.pending_actions === 1 ? "" : "s"}</small></td><td><span className={`report-status ${String(item.report_status || "").toLowerCase().replaceAll(" ", "-")}`}>{item.report_status || "Not tracked"}</span></td><td>{item.card_count ?? 0}</td></tr>)}</tbody></table></div>;
 }
 
-function RoleUsers({ users, universities = [], onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
+function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -1620,7 +1620,7 @@ function RoleUsers({ users, universities = [], onAdd, onDeactivate, onReactivate
   const [selectedAccount, setSelectedAccount] = useState(null);
   const names = new Map(users.map((item) => [String(item.id), item.full_name]));
   const universityNames = new Map(universities.map((item) => [String(item.id), item.name]));
-  const directoryUsers = superAdmin ? users.filter((item) => item.role !== "super_admin") : users;
+  const directoryUsers = (superAdmin ? users.filter((item) => item.role !== "super_admin") : users).filter((item) => !currentUserId || String(item.id) !== String(currentUserId));
   const canDeactivate = (item) => onDeactivate && (superAdmin || item.role !== "university_admin");
   const roleLabel = (role) => role.replaceAll("_", " ");
   const matches = (item) => {
