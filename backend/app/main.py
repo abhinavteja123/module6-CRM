@@ -25,10 +25,11 @@ Role = Literal[
     "super_admin",
     "university_admin",
     "coordinator",
-    "regional_manager",
     "placement_manager",
+    "data_analyst",
 ]
-TEAM_ROLES = {"coordinator", "regional_manager", "placement_manager"}
+TEAM_ROLES = {"coordinator", "placement_manager", "data_analyst"}
+ANALYTICS_ROLES = {"university_admin", "coordinator", "placement_manager", "data_analyst"}
 
 
 class Settings(BaseSettings):
@@ -56,7 +57,42 @@ if not 10 <= settings.bcrypt_rounds <= 14:
 if settings.profile_cache_ttl_seconds < 1:
     raise RuntimeError("PROFILE_CACHE_TTL_SECONDS must be at least 1")
 
-db: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+class ThreadSafeRequestBuilder:
+    """Serialize Supabase sync-client executions shared by FastAPI worker threads."""
+
+    def __init__(self, builder, lock: RLock):
+        self._builder = builder
+        self._lock = lock
+
+    def __getattr__(self, name):
+        attribute = getattr(self._builder, name)
+        if not callable(attribute):
+            return attribute
+
+        def call(*args, **kwargs):
+            if name == "execute":
+                with self._lock:
+                    return attribute(*args, **kwargs)
+            result = attribute(*args, **kwargs)
+            if hasattr(result, "execute"):
+                return ThreadSafeRequestBuilder(result, self._lock)
+            return result
+
+        return call
+
+
+class ThreadSafeSupabaseClient:
+    def __init__(self, client: Client):
+        self._client = client
+        self._lock = RLock()
+
+    def table(self, table_name: str):
+        with self._lock:
+            builder = self._client.table(table_name)
+        return ThreadSafeRequestBuilder(builder, self._lock)
+
+
+db: ThreadSafeSupabaseClient = ThreadSafeSupabaseClient(create_client(settings.supabase_url, settings.supabase_service_role_key))
 db_executor = ThreadPoolExecutor(max_workers=8)
 bearer = HTTPBearer(auto_error=False)
 profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -77,6 +113,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+CORS_ORIGINS = {settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"}
+
+
+@app.middleware("http")
+async def add_cors_headers_to_error_responses(request: Request, call_next):
+    """Keep CORS headers on handled 4xx/5xx responses so the UI can show the real API error."""
+    response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin in CORS_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
 
 DEFAULT_KANBAN_STAGES = [
     {"name": "Prospecting", "color": "#64748b", "position": 0},
@@ -158,9 +207,36 @@ def notify_users(
         create_notification(user_id, notification_type, title, message, university_id, entity_type, entity_id, href)
 
 
+CRM_ACCESS_AREAS = ("organizations", "contacts", "meeting_reports")
+FULL_CRM_PERMISSIONS = {area: True for area in CRM_ACCESS_AREAS}
+
+
+def crm_grant(user: dict[str, Any]) -> dict[str, Any] | None:
+    if user.get("role") in {"university_admin", "placement_manager"}:
+        return {"access_level": "full", "permissions": FULL_CRM_PERMISSIONS}
+    if user.get("role") not in {"coordinator", "data_analyst"}:
+        return None
+    rows = (db.table("placement_access_grants")
+        .select("access_level,permissions")
+        .eq("university_id", user.get("university_id"))
+        .eq("granted_to", user["id"])
+        .eq("scope", "crm")
+        .limit(1).execute().data or [])
+    return rows[0] if rows else None
+
+
+def has_crm_area_access(user: dict[str, Any], area: str, organization_id: str | None = None) -> bool:
+    grant = crm_grant(user)
+    if not grant:
+        return False
+    if grant.get("access_level") == "full":
+        return True
+    return bool((grant.get("permissions") or {}).get(area))
+
+
 def safe_contact_for_role(row: dict[str, Any], user: dict[str, Any], organization_name: str | None = None) -> dict[str, Any]:
-    """Mask personal contact identity for university admins and supervisors."""
-    if user.get("role") == "placement_manager":
+    """Mask personal contact identity unless the admin granted contact access."""
+    if has_crm_area_access(user, "contacts", row.get("organization_id")):
         return {**row, **({"organization_name": organization_name} if organization_name else {})}
     return {
         "id": row.get("id"),
@@ -177,7 +253,7 @@ def safe_contact_for_role(row: dict[str, Any], user: dict[str, Any], organizatio
 
 
 def safe_report_for_role(row: dict[str, Any], user: dict[str, Any], organization_name: str | None = None) -> dict[str, Any]:
-    if user.get("role") == "placement_manager":
+    if has_crm_area_access(user, "meeting_reports", row.get("organization_id")):
         return {**row, **({"organization_name": organization_name} if organization_name else {})}
     return {
         **row,
@@ -191,6 +267,11 @@ def safe_report_for_role(row: dict[str, Any], user: dict[str, Any], organization
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def has_full_crm_access(user: dict[str, Any], organization_id: str | None = None) -> bool:
+    grant = crm_grant(user)
+    return bool(grant and grant.get("access_level") == "full")
 
 
 def password_hash(password: str) -> str:
@@ -377,7 +458,7 @@ def team_ids(user: dict[str, Any]) -> list[str]:
         return []
     if role == "university_admin":
         return [str(item["id"]) for item in all_profiles_for_university(user.get("university_id"))]
-    if role == "placement_manager":
+    if role in {"placement_manager", "data_analyst"}:
         return [user_id]
     people = all_profiles_for_university(user.get("university_id"))
     by_parent: dict[str, list[str]] = {}
@@ -417,9 +498,9 @@ def can_manage_target(actor: dict[str, Any], target_role: str) -> bool:
     if role == "super_admin":
         return target_role == "university_admin"
     if role == "university_admin":
-        return target_role in {"coordinator", "regional_manager", "placement_manager"}
+        return target_role in {"coordinator", "placement_manager", "data_analyst"}
     if role == "coordinator":
-        return target_role in {"regional_manager", "placement_manager"}
+        return target_role in {"placement_manager"}
     return False
 
 
@@ -563,6 +644,10 @@ class UniversityIn(BaseModel):
     name: str = Field(min_length=2)
     code: str | None = None
     city: str = Field(min_length=1)
+    plan_name: str = "Standard"
+    plan_price: float = Field(default=0, ge=0)
+    plan_expires_at: date | None = None
+    max_accounts: int = Field(default=100, ge=1)
 
 
 class UserIn(BaseModel):
@@ -577,11 +662,109 @@ class UserStatusIn(BaseModel):
     status: Literal["active", "inactive"]
 
 
+class UniversityUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=2)
+    code: str | None = None
+    city: str | None = Field(default=None, min_length=1)
+    status: Literal["active", "inactive"] | None = None
+    plan_name: str | None = None
+    plan_price: float | None = Field(default=None, ge=0)
+    plan_expires_at: date | None = None
+    max_accounts: int | None = Field(default=None, ge=1)
+
+
 class TeamUserUpdateIn(BaseModel):
     full_name: str | None = Field(default=None, min_length=1)
     email: str | None = Field(default=None, min_length=3)
     password: str | None = Field(default=None, min_length=8)
     status: Literal["active", "inactive"] | None = None
+
+
+class SeasonIn(BaseModel):
+    name: str = Field(min_length=1)
+    academic_year: str = Field(min_length=4)
+    start_date: date
+    end_date: date
+    status: Literal["active", "completed"] = "active"
+
+
+class AssignmentIn(BaseModel):
+    season_id: str
+    user_id: str
+
+
+class AssignmentBulkIn(BaseModel):
+    season_id: str
+    user_ids: list[str] = Field(min_length=1)
+
+
+class CategoryIn(BaseModel):
+    name: str = Field(min_length=1)
+    min_ctc_lpa: float | None = Field(default=None, ge=0)
+    max_ctc_lpa: float | None = Field(default=None, ge=0)
+    description: str | None = None
+
+
+class CityIn(BaseModel):
+    city: str = Field(min_length=1)
+
+
+class CityBulkIn(BaseModel):
+    cities: list[str] = Field(min_length=1)
+
+
+class TargetEntrySettingIn(BaseModel):
+    coordinator_target_entry_enabled: bool
+
+
+class TargetIn(BaseModel):
+    season_id: str
+    user_id: str
+    category_id: str | None = None
+    companies_target: int = Field(default=0, ge=0)
+    drives_target: int = Field(default=0, ge=0)
+    offers_target: int = Field(default=0, ge=0)
+    students_placed_target: int = Field(default=0, ge=0)
+    students_joined_target: int = Field(default=0, ge=0)
+
+
+class MetricIn(BaseModel):
+    season_id: str
+    organization_id: str
+    category_id: str | None = None
+    companies_acquired: int = Field(default=0, ge=0)
+    drives_conducted: int = Field(default=0, ge=0)
+    offers_received: int = Field(default=0, ge=0)
+    students_placed: int = Field(default=0, ge=0)
+    students_joined: int = Field(default=0, ge=0)
+    pipeline_status: Literal[
+        "prospect", "outreach", "in_talks", "discussion", "proposal_shared",
+        "negotiation", "drive_scheduled", "drive_completed", "offer_stage",
+        "placed", "joined", "on_hold", "cancelled"
+    ] = "prospect"
+    outlook: Literal["positive", "neutral", "negative"] = "neutral"
+    expected_date: date | None = None
+    drive_date: date | None = None
+    last_contact_date: date | None = None
+    next_follow_up_date: date | None = None
+    drive_status: Literal["not_scheduled", "tentative", "scheduled", "completed", "cancelled"] = "not_scheduled"
+    company_probability: int = Field(default=0, ge=0, le=100)
+    students_registered: int = Field(default=0, ge=0)
+    students_selected: int = Field(default=0, ge=0)
+    students_rejected: int = Field(default=0, ge=0)
+    next_action: str | None = None
+    notes: str | None = None
+
+
+class AccessGrantIn(BaseModel):
+    user_id: str
+    access_level: Literal["full", "partial"] = "full"
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+class DuplicateReviewIn(BaseModel):
+    status: Literal["approved", "rejected"]
+    review_note: str | None = None
 
 
 @app.get("/health")
@@ -701,7 +884,7 @@ def list_audit_events(limit: int = Query(default=50, ge=1, le=200), user=Depends
     else:
         query = query.in_("actor_id", team_ids(user))
     events = query.execute().data or []
-    if user.get("role") in {"coordinator", "regional_manager"}:
+    if user.get("role") in {"coordinator", "data_analyst"} and not has_full_crm_access(user):
         return [{**event, "summary": {"activity": "Protected team activity"}} for event in events]
     return events
 
@@ -729,12 +912,18 @@ def password_reset_request(payload: PasswordResetRequestIn):
 
 
 @app.get("/api/organizations")
-def list_organizations(user=Depends(require_roles("placement_manager", "university_admin"))):
+def list_organizations(user=Depends(require_roles("placement_manager", "university_admin", "coordinator"))):
     organizations = scoped_rows("organizations", user).order("created_at", desc=True).execute().data or []
-    if user.get("role") == "university_admin":
+    if user.get("role") in {"university_admin", "coordinator"}:
         owners = profile_list_for_user_ids([str(item.get("placement_manager_id")) for item in organizations if item.get("placement_manager_id")])
         owner_names = {str(item["id"]): item["full_name"] for item in owners}
-        return [{**item, "owner_name": owner_names.get(str(item.get("placement_manager_id")), "Team member")} for item in organizations]
+        result = []
+        for item in organizations:
+            if user.get("role") == "coordinator" and not has_full_crm_access(user, item.get("id")):
+                result.append({"id": item.get("id"), "name": "Organization activity", "industry": None, "website": None, "city": None, "status": item.get("status"), "notes": None, "owner_name": owner_names.get(str(item.get("placement_manager_id")), "Team member"), "placement_manager_id": item.get("placement_manager_id")})
+            else:
+                result.append({**item, "owner_name": owner_names.get(str(item.get("placement_manager_id")), "Team member")})
+        return result
     return organizations
 
 
@@ -750,9 +939,20 @@ def check_duplicate(name: str = Query(min_length=1), user=Depends(require_roles(
 
 @app.post("/api/organizations", status_code=201)
 def create_organization(payload: OrganizationIn, user=Depends(require_roles("placement_manager"))):
-    duplicate = check_duplicate(payload.name, user)
-    if duplicate["exists"] and not payload.allow_duplicate:
-        fail("This organization already exists in your university.", status.HTTP_409_CONFLICT, {"code": "duplicate_organization", "message": "This organization already exists in your university. Coordinate before adding another record."})
+    duplicate_rows = db.table("organizations").select("id,name,placement_manager_id").ilike("name", payload.name.strip()).eq("university_id", user.get("university_id")).limit(1).execute().data or []
+    if duplicate_rows:
+        request_row = db.table("duplicate_company_requests").insert({
+            "university_id": user.get("university_id"),
+            "requested_by": user["id"],
+            "existing_organization_id": duplicate_rows[0]["id"],
+            "requested_name": payload.name,
+            "requested_payload": payload.model_dump(exclude={"allow_duplicate"}),
+        }).execute().data[0]
+        admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
+        notify_users([str(item["id"]) for item in admins], "duplicate_company_approval", "Duplicate company approval needed", f"{user.get('full_name', 'A team member')} requested to add {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
+        coordinators = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "coordinator").eq("status", "active").execute().data or []
+        notify_users([str(item["id"]) for item in coordinators], "duplicate_company_notice", "Duplicate company request submitted", f"A duplicate company request was sent to the university administrator for {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
+        fail("This organization already exists. An approval request was sent to the university administrator.", status.HTTP_409_CONFLICT, {"code": "duplicate_approval_required", "request_id": request_row["id"]})
     data = payload.model_dump(exclude={"allow_duplicate"})
     data.update({"placement_manager_id": user["id"], "university_id": user.get("university_id")})
     created = db.table("organizations").insert(data).execute().data[0]
@@ -785,9 +985,9 @@ def delete_organization(item_id: str, user=Depends(require_roles("placement_mana
 
 
 @app.get("/api/contacts")
-def list_contacts(user=Depends(require_roles("placement_manager", "university_admin"))):
+def list_contacts(user=Depends(require_roles("placement_manager", "university_admin", "coordinator"))):
     contacts = scoped_rows("contacts", user).order("created_at", desc=True).execute().data or []
-    if user.get("role") == "university_admin":
+    if user.get("role") in {"university_admin", "coordinator"}:
         org_ids = list({str(item.get("organization_id")) for item in contacts if item.get("organization_id")})
         organizations = db.table("organizations").select("id,name").in_("id", org_ids).execute().data if org_ids else []
         org_names = {str(item["id"]): item["name"] for item in (organizations or [])}
@@ -822,7 +1022,7 @@ def update_contact(contact_id: str, payload: ContactUpdateIn, user=Depends(requi
 
 
 @app.get("/api/meeting-reports")
-def list_reports(user=Depends(require_roles("placement_manager", "university_admin"))):
+def list_reports(user=Depends(require_roles("placement_manager", "university_admin", "coordinator"))):
     reports = scoped_rows("meeting_reports", user).order("meeting_date", desc=True).execute().data or []
     ids = team_ids(user)
     actions = db.table("meeting_action_items").select("*").in_("placement_manager_id", ids).order("position").execute().data or []
@@ -831,7 +1031,7 @@ def list_reports(user=Depends(require_roles("placement_manager", "university_adm
         by_report.setdefault(action["meeting_report_id"], []).append(action)
     for report in reports:
         report["action_items_list"] = by_report.get(report["id"], [])
-    if user.get("role") == "university_admin":
+    if user.get("role") in {"university_admin", "coordinator"}:
         org_ids = list({str(item.get("organization_id")) for item in reports if item.get("organization_id")})
         organizations = db.table("organizations").select("id,name").in_("id", org_ids).execute().data if org_ids else []
         org_names = {str(item["id"]): item["name"] for item in (organizations or [])}
@@ -894,7 +1094,7 @@ def global_search(
             if matches(university.get("name"), university.get("code"), university.get("city"), university.get("status")):
                 result("university", university["id"], university["name"], university.get("city") or "", {"code": university.get("code"), "status": university.get("status")}, "Universities")
 
-    can_read_crm = user.get("role") in {"placement_manager", "university_admin", "coordinator", "regional_manager"}
+    can_read_crm = user.get("role") in {"placement_manager", "university_admin", "coordinator"}
     if can_read_crm and "organizations" in requested:
         org_query = db.table("organizations").select("*")
         if user.get("role") == "placement_manager":
@@ -909,12 +1109,12 @@ def global_search(
         for organization in organizations:
             if not matches(organization.get("name"), organization.get("industry"), organization.get("city"), organization.get("status"), owner_names.get(str(organization.get("placement_manager_id")))):
                 continue
-            if user.get("role") in {"coordinator", "regional_manager"}:
+            if user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", organization["id"]):
                 result("organization", organization["id"], "Organization activity", f"{organization.get('status', 'active')} · {owner_names.get(str(organization.get('placement_manager_id')), 'Team member')}", {"masked": True, "status": organization.get("status")}, "Organizations")
             else:
                 result("organization", organization["id"], organization.get("name", "Organization"), owner_names.get(str(organization.get("placement_manager_id")), ""), {"industry": organization.get("industry"), "city": organization.get("city"), "status": organization.get("status"), "masked": False}, "Organizations")
 
-    if can_read_crm and "contacts" in requested and user.get("role") in {"placement_manager", "university_admin"}:
+    if can_read_crm and "contacts" in requested and user.get("role") in {"placement_manager", "university_admin", "coordinator"}:
         contact_query = db.table("contacts").select("*")
         if user.get("role") == "placement_manager":
             contact_query = contact_query.eq("placement_manager_id", user["id"])
@@ -930,6 +1130,13 @@ def global_search(
                 if not matches(organization_name):
                     continue
                 result("contact", contact["id"], "Contact details protected", organization_name, {"masked": True}, "Contacts")
+            elif user.get("role") == "coordinator":
+                if has_crm_area_access(user, "contacts", contact.get("organization_id")):
+                    if not matches(contact.get("name"), contact.get("email"), contact.get("phone"), contact.get("designation"), organization_name):
+                        continue
+                    result("contact", contact["id"], contact.get("name", "Contact"), organization_name, {"designation": contact.get("designation"), "masked": False}, "Contacts")
+                elif matches(organization_name):
+                    result("contact", contact["id"], "Contact details protected", organization_name, {"masked": True}, "Contacts")
             elif matches(contact.get("name"), contact.get("email"), contact.get("phone"), contact.get("designation"), organization_name):
                 result("contact", contact["id"], contact.get("name", "Contact"), organization_name, {"designation": contact.get("designation"), "masked": False}, "Contacts")
 
@@ -947,7 +1154,7 @@ def global_search(
             organization_name = org_names.get(str(report.get("organization_id")), "Organization activity")
             if not matches(report.get("title"), report.get("meeting_date"), report.get("outcome"), organization_name):
                 continue
-            if user.get("role") in {"coordinator", "regional_manager"}:
+            if user.get("role") == "coordinator" and not has_crm_area_access(user, "meeting_reports", report.get("organization_id")):
                 result("report", report["id"], "Report activity", "Protected team activity", {"meeting_date": report.get("meeting_date"), "outcome": report.get("outcome"), "follow_up_date": report.get("follow_up_date"), "masked": True}, "Team")
             else:
                 result("report", report["id"], report.get("title") or "Meeting report", organization_name, {"meeting_date": report.get("meeting_date"), "outcome": report.get("outcome"), "follow_up_date": report.get("follow_up_date"), "masked": user.get("role") != "placement_manager"}, "Meeting Reports")
@@ -1126,7 +1333,7 @@ def team_summary(user: dict[str, Any]) -> dict[str, Any]:
     reports = db.table("meeting_reports").select("id,placement_manager_id,meeting_date,follow_up_date").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
     action_items = db.table("meeting_action_items").select("id,placement_manager_id,is_completed").in_("placement_manager_id", summary_ids).eq("is_completed", False).execute().data if summary_ids else []
     cards = db.table("kanban_cards").select("id,placement_manager_id,stage_id").in_("placement_manager_id", summary_ids).execute().data if summary_ids else []
-    masked = user.get("role") in {"coordinator", "regional_manager"}
+    masked = user.get("role") == "coordinator" and not has_full_crm_access(user)
     today = date.today()
     recent_cutoff = today - timedelta(days=30)
     summaries = []
@@ -1161,7 +1368,7 @@ def team_summary(user: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/team/overview")
-def get_team_overview(user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
+def get_team_overview(user=Depends(require_roles("university_admin", "coordinator"))):
     return team_summary(user)
 
 
@@ -1172,17 +1379,21 @@ def list_universities(user=Depends(require_roles("super_admin"))):
 
 @app.post("/api/admin/universities", status_code=201)
 def create_university(payload: UniversityIn, user=Depends(require_roles("super_admin"))):
-    created = db.table("universities").insert({**payload.model_dump(), "created_by": user["id"]}).execute().data[0]
+    created = db.table("universities").insert({**payload.model_dump(mode="json"), "created_by": user["id"]}).execute().data[0]
     record_audit(user, "created", "university", created.get("id"), created.get("id"), {"name": created.get("name"), "city": created.get("city")})
     return created
 
 
 @app.patch("/api/admin/universities/{university_id}")
-def update_university(university_id: str, payload: UserStatusIn, user=Depends(require_roles("super_admin"))):
-    result = db.table("universities").update({"status": payload.status, "updated_at": now().isoformat()}).eq("id", university_id).execute()
+def update_university(university_id: str, payload: UniversityUpdateIn, user=Depends(require_roles("super_admin"))):
+    updates = payload.model_dump(mode="json", exclude_unset=True)
+    if not updates:
+        fail("No university changes supplied", 400)
+    updates["updated_at"] = now().isoformat()
+    result = db.table("universities").update(updates).eq("id", university_id).execute()
     if not result.data:
         fail("University not found", 404)
-    record_audit(user, "status_changed", "university", university_id, university_id, {"status": payload.status})
+    record_audit(user, "updated", "university", university_id, university_id, {"fields": list(updates.keys())})
     return result.data[0]
 
 
@@ -1199,7 +1410,7 @@ def create_university_admin(payload: UserIn, user=Depends(require_roles("super_a
 
 
 @app.get("/api/team/users")
-def list_team_users(user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
+def list_team_users(user=Depends(require_roles("university_admin", "coordinator"))):
     people = add_report_names(profile_list_for_user_ids(team_ids(user)), user.get("university_id"))
     people = [person for person in people if str(person.get("id")) != str(user["id"])]
     if user.get("role") == "university_admin":
@@ -1210,9 +1421,11 @@ def list_team_users(user=Depends(require_roles("university_admin", "coordinator"
 
 
 @app.post("/api/team/users", status_code=201)
-def create_team_user(payload: UserIn, user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
+def create_team_user(payload: UserIn, user=Depends(require_roles("university_admin", "coordinator"))):
     if user.get("role") not in {"university_admin", "coordinator"}:
         fail("Only a university administrator or coordinator can add team accounts", 403)
+    if user.get("role") == "coordinator" and payload.role != "placement_manager":
+        fail("Coordinators can only create placement manager accounts", 403)
     if not can_manage_target(user, payload.role):
         fail("You cannot create this role", 403)
     if payload.university_id and payload.university_id != user.get("university_id"):
@@ -1224,6 +1437,12 @@ def create_team_user(payload: UserIn, user=Depends(require_roles("university_adm
 def create_user(payload: UserIn, actor: dict[str, Any]) -> dict[str, Any]:
     if get_profile_by_email(payload.email):
         fail("An account with this email already exists", 409)
+    if payload.university_id:
+        university = db.table("universities").select("max_accounts").eq("id", payload.university_id).limit(1).execute().data or []
+        if university:
+            count = db.table("profiles").select("id", count="exact").eq("university_id", payload.university_id).execute().count or 0
+            if count >= int(university[0].get("max_accounts") or 100):
+                fail("This university has reached its configured account limit", 409, {"code": "ACCOUNT_LIMIT_REACHED", "max_accounts": university[0].get("max_accounts")})
     row = {
         "id": str(uuid.uuid4()),
         "email": payload.email.strip().lower(),
@@ -1243,7 +1462,7 @@ def create_user(payload: UserIn, actor: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.patch("/api/team/users/{user_id}")
-def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
+def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(require_roles("university_admin", "coordinator"))):
     if user.get("role") not in {"university_admin", "coordinator"}:
         fail("Only a university administrator or coordinator can manage team accounts", 403)
     if user_id not in team_ids(user) or user_id == str(user["id"]):
@@ -1255,7 +1474,7 @@ def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(requi
         fail("Only the super admin can manage university administrator accounts", 403)
     if user.get("role") == "coordinator" and (
         str(target.get("reports_to")) != str(user["id"])
-        or target.get("role") not in {"regional_manager", "placement_manager"}
+        or target.get("role") not in {"placement_manager"}
     ):
         fail("You can only manage your own regional managers and placement managers", 403)
     updates: dict[str, Any] = {}
@@ -1288,7 +1507,7 @@ def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(requi
 
 
 @app.delete("/api/team/users/{user_id}")
-def delete_team_user(user_id: str, user=Depends(require_roles("university_admin", "coordinator", "regional_manager"))):
+def delete_team_user(user_id: str, user=Depends(require_roles("university_admin", "coordinator"))):
     if user.get("role") not in {"university_admin", "coordinator"}:
         fail("Only a university administrator or coordinator can remove team accounts", 403)
     if user_id not in team_ids(user) or user_id == str(user["id"]):
@@ -1300,7 +1519,7 @@ def delete_team_user(user_id: str, user=Depends(require_roles("university_admin"
         fail("Only the super admin can manage university administrator accounts", 403)
     if user.get("role") == "coordinator" and (
         str(target.get("reports_to")) != str(user["id"])
-        or target.get("role") not in {"regional_manager", "placement_manager"}
+        or target.get("role") not in {"placement_manager"}
     ):
         fail("You can only manage your own regional managers and placement managers", 403)
     if db.table("profiles").select("id", count="exact").eq("reports_to", user_id).execute().count:
@@ -1330,3 +1549,405 @@ def update_admin_user(user_id: str, payload: UserStatusIn, user=Depends(require_
         create_notification(user_id, "account_reactivated", "Account reactivated", "Your account was reactivated by the super admin.", result.data[0].get("university_id"), "account", user_id, "Users")
     record_audit(user, "status_changed", "account", user_id, result.data[0].get("university_id"), {"status": payload.status})
     return safe_user(result.data[0])
+
+
+def university_scope(user: dict[str, Any], university_id: str | None = None) -> str:
+    if user.get("role") == "super_admin" and university_id:
+        return university_id
+    if not user.get("university_id"):
+        fail("This account is not assigned to a university", 403)
+    if university_id and str(university_id) != str(user["university_id"]):
+        fail("This record belongs to another university", 403)
+    return str(user["university_id"])
+
+
+def university_rows(table: str, user: dict[str, Any], university_id: str | None = None):
+    scope = university_scope(user, university_id)
+    return db.table(table).select("*").eq("university_id", scope)
+
+
+@app.get("/api/placement/seasons")
+def list_seasons(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return university_rows("placement_seasons", user).order("start_date", desc=True).execute().data or []
+
+
+@app.post("/api/placement/seasons", status_code=201)
+def create_season(payload: SeasonIn, user=Depends(require_roles("university_admin"))):
+    if payload.end_date < payload.start_date:
+        fail("Season end date must be on or after the start date")
+    created = db.table("placement_seasons").insert({**payload.model_dump(mode="json"), "university_id": user["university_id"], "created_by": user["id"]}).execute().data[0]
+    record_audit(user, "created", "placement_season", created["id"], user["university_id"], {"name": created["name"]})
+    return created
+
+
+@app.get("/api/placement/assignments")
+def list_assignments(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return university_rows("placement_assignments", user).order("created_at", desc=True).execute().data or []
+
+
+@app.post("/api/placement/assignments", status_code=201)
+def create_assignment(payload: AssignmentIn, user=Depends(require_roles("university_admin"))):
+    target = get_profile(payload.user_id)
+    season = university_rows("placement_seasons", user).eq("id", payload.season_id).limit(1).execute().data or []
+    if not target or str(target.get("university_id")) != str(user.get("university_id")) or target.get("role") not in {"coordinator", "placement_manager"}:
+        fail("Only coordinators and placement managers in your university can be assigned", 400)
+    if not season:
+        fail("Placement season not found", 404)
+    row = db.table("placement_assignments").upsert({**payload.model_dump(), "university_id": user["university_id"], "assigned_by": user["id"]}, on_conflict="season_id,user_id").execute().data[0]
+    create_notification(payload.user_id, "season_assignment", "Placement season assigned", f"You were assigned to {season[0].get('name', 'a placement season')}.", user["university_id"], "placement_season", payload.season_id, "Placement Setup")
+    return row
+
+
+@app.post("/api/placement/assignments/bulk", status_code=201)
+def create_assignments_bulk(payload: AssignmentBulkIn, user=Depends(require_roles("university_admin"))):
+    user_ids = list(dict.fromkeys(payload.user_ids))
+    season = university_rows("placement_seasons", user).eq("id", payload.season_id).limit(1).execute().data or []
+    if not season:
+        fail("Placement season not found", 404)
+    profiles = db.table("profiles").select(PROFILE_COLUMNS).eq("university_id", user["university_id"]).in_("id", user_ids).execute().data or []
+    valid_ids = {str(profile["id"]) for profile in profiles if profile.get("role") in {"coordinator", "placement_manager"}}
+    invalid_ids = [user_id for user_id in user_ids if str(user_id) not in valid_ids]
+    if invalid_ids:
+        fail("Only coordinators and placement managers in your university can be assigned", 400)
+    rows = db.table("placement_assignments").upsert(
+        [{"season_id": payload.season_id, "user_id": user_id, "university_id": user["university_id"], "assigned_by": user["id"]} for user_id in user_ids],
+        on_conflict="season_id,user_id",
+    ).execute().data or []
+    for user_id in user_ids:
+        db_executor.submit(
+            create_notification,
+            user_id,
+            "season_assignment",
+            "Placement season assigned",
+            f"You were assigned to {season[0].get('name', 'a placement season')}.",
+            user["university_id"],
+            "placement_season",
+            payload.season_id,
+            "Placement Setup",
+        )
+    return rows
+
+
+@app.delete("/api/placement/assignments/{assignment_id}")
+def remove_assignment(assignment_id: str, user=Depends(require_roles("university_admin"))):
+    existing = university_rows("placement_assignments", user).eq("id", assignment_id).limit(1).execute().data or []
+    if not existing:
+        fail("Season assignment not found", 404)
+    db.table("placement_assignments").delete().eq("id", assignment_id).eq("university_id", user["university_id"]).execute()
+    return {"ok": True, "removed_assignment_id": assignment_id}
+
+
+@app.patch("/api/placement/seasons/{season_id}")
+def update_season(season_id: str, payload: SeasonIn, user=Depends(require_roles("university_admin"))):
+    result = university_rows("placement_seasons", user, user["university_id"]).eq("id", season_id).execute().data or []
+    if not result:
+        fail("Placement season not found", 404)
+    updates = payload.model_dump(mode="json")
+    updated = db.table("placement_seasons").update({**updates, "updated_at": now().isoformat()}).eq("id", season_id).eq("university_id", user["university_id"]).execute().data[0]
+    return updated
+
+
+@app.get("/api/placement/categories")
+def list_categories(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return university_rows("company_categories", user).order("name").execute().data or []
+
+
+@app.post("/api/placement/categories", status_code=201)
+def create_category(payload: CategoryIn, user=Depends(require_roles("university_admin"))):
+    created = db.table("company_categories").insert({**payload.model_dump(), "university_id": user["university_id"], "created_by": user["id"]}).execute().data[0]
+    return created
+
+
+@app.patch("/api/placement/categories/{category_id}")
+def update_category(category_id: str, payload: CategoryIn, user=Depends(require_roles("university_admin"))):
+    result = db.table("company_categories").update(payload.model_dump()).eq("id", category_id).eq("university_id", user["university_id"]).execute().data or []
+    if not result:
+        fail("Company category not found", 404)
+    return result[0]
+
+
+@app.get("/api/placement/cities")
+def list_cities(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return university_rows("university_cities", user).eq("is_active", True).order("city").execute().data or []
+
+
+@app.post("/api/placement/cities", status_code=201)
+def create_city(payload: CityIn, user=Depends(require_roles("university_admin"))):
+    created = db.table("university_cities").insert({"city": payload.city.strip(), "university_id": user["university_id"], "created_by": user["id"]}).execute().data[0]
+    return created
+
+
+@app.post("/api/placement/cities/bulk", status_code=201)
+def create_cities_bulk(payload: CityBulkIn, user=Depends(require_roles("university_admin"))):
+    normalized = []
+    seen = set()
+    for city in payload.cities:
+        value = city.strip()
+        key = value.casefold()
+        if value and key not in seen:
+            normalized.append(value)
+            seen.add(key)
+    if not normalized:
+        fail("Choose or enter at least one city")
+    existing = university_rows("university_cities", user).execute().data or []
+    existing_names = {str(item.get("city", "")).casefold() for item in existing}
+    new_cities = [city for city in normalized if city.casefold() not in existing_names]
+    if new_cities:
+        db.table("university_cities").insert([
+            {"city": city, "university_id": user["university_id"], "created_by": user["id"]}
+            for city in new_cities
+        ]).execute()
+    return university_rows("university_cities", user).eq("is_active", True).order("city").execute().data or []
+
+
+@app.patch("/api/placement/cities/{city_id}")
+def update_city(city_id: str, payload: CityIn, user=Depends(require_roles("university_admin"))):
+    result = db.table("university_cities").update({"city": payload.city.strip()}).eq("id", city_id).eq("university_id", user["university_id"]).execute().data or []
+    if not result:
+        fail("City not found", 404)
+    return result[0]
+
+
+@app.get("/api/placement/targets")
+def list_targets(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    query = university_rows("placement_targets", user)
+    if season_id:
+        query = query.eq("season_id", season_id)
+    if user.get("role") == "placement_manager":
+        query = query.eq("user_id", user["id"])
+    elif user.get("role") == "coordinator":
+        query = query.in_("user_id", team_ids(user))
+    return query.order("updated_at", desc=True).execute().data or []
+
+
+@app.get("/api/placement/settings")
+def placement_settings(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    rows = db.table("universities").select("coordinator_target_entry_enabled").eq("id", user["university_id"]).limit(1).execute().data or []
+    return rows[0] if rows else {"coordinator_target_entry_enabled": False}
+
+
+@app.patch("/api/placement/settings")
+def update_placement_settings(payload: TargetEntrySettingIn, user=Depends(require_roles("university_admin"))):
+    rows = db.table("universities").update(payload.model_dump()).eq("id", user["university_id"]).execute().data or []
+    if not rows:
+        fail("University settings not found", 404)
+    record_audit(user, "updated", "placement_settings", user["university_id"], user["university_id"], payload.model_dump())
+    return rows[0]
+
+
+@app.post("/api/placement/targets", status_code=201)
+def upsert_target(payload: TargetIn, user=Depends(require_roles("university_admin"))):
+    target_user = get_profile(payload.user_id)
+    if not target_user or str(target_user.get("university_id")) != str(user.get("university_id")) or target_user.get("role") != "placement_manager":
+        fail("Targets can only be assigned to placement managers in your university", 400)
+    season = university_rows("placement_seasons", user).eq("id", payload.season_id).limit(1).execute().data or []
+    category = (
+        university_rows("company_categories", user).eq("id", payload.category_id).limit(1).execute().data
+        if payload.category_id
+        else [True]
+    )
+    if not season:
+        fail("Choose a season belonging to your university", 400)
+    if not category:
+        fail("Choose a company category belonging to your university", 400)
+    data = {**payload.model_dump(), "university_id": user["university_id"], "created_by": user["id"], "updated_at": now().isoformat()}
+    existing = db.table("placement_targets").select("id").eq("season_id", payload.season_id).eq("user_id", payload.user_id)
+    existing = existing.is_("category_id", "null") if payload.category_id is None else existing.eq("category_id", payload.category_id)
+    row = existing.limit(1).execute().data or []
+    if row:
+        return db.table("placement_targets").update(data).eq("id", row[0]["id"]).execute().data[0]
+    return db.table("placement_targets").insert(data).execute().data[0]
+
+
+@app.get("/api/placement/metrics")
+def list_metrics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    query = university_rows("placement_metrics", user)
+    if season_id:
+        query = query.eq("season_id", season_id)
+    if user.get("role") == "placement_manager":
+        query = query.eq("placement_manager_id", user["id"])
+    elif user.get("role") == "coordinator":
+        query = query.in_("placement_manager_id", team_ids(user))
+    return query.order("updated_at", desc=True).execute().data or []
+
+
+@app.post("/api/placement/metrics", status_code=201)
+def upsert_metric(payload: MetricIn, user=Depends(require_roles("placement_manager", "coordinator"))):
+    org = scoped_rows("organizations", user, payload.organization_id).execute().data or []
+    if not org:
+        fail("Organization is outside your authorized placement scope", 403)
+    manager_id = org[0].get("placement_manager_id")
+    data = {**payload.model_dump(), "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
+    row = db.table("placement_metrics").select("id").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
+    if row:
+        return db.table("placement_metrics").update(data).eq("id", row[0]["id"]).execute().data[0]
+    return db.table("placement_metrics").insert(data).execute().data[0]
+
+
+@app.get("/api/placement/analytics")
+def placement_analytics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    query = university_rows("placement_metrics", user)
+    if season_id:
+        query = query.eq("season_id", season_id)
+    if user.get("role") == "placement_manager":
+        query = query.eq("placement_manager_id", user["id"])
+    elif user.get("role") == "coordinator":
+        query = query.in_("placement_manager_id", team_ids(user))
+    rows = query.order("updated_at", desc=True).execute().data or []
+    keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed", "students_joined")
+    target_query = university_rows("placement_targets", user)
+    if season_id:
+        target_query = target_query.eq("season_id", season_id)
+    if user.get("role") == "placement_manager":
+        target_query = target_query.eq("user_id", user["id"])
+    elif user.get("role") == "coordinator":
+        target_query = target_query.in_("user_id", team_ids(user))
+    targets = target_query.execute().data or []
+    totals = {key: sum(int(row.get(key) or 0) for row in rows) for key in keys}
+    target_keys = ("companies_target", "drives_target", "offers_target", "students_placed_target", "students_joined_target")
+    target_totals = {key: sum(int(row.get(key) or 0) for row in targets) for key in target_keys}
+    today = date.today()
+    status_labels = {"prospect": "Prospect", "outreach": "Outreach", "in_talks": "In talks", "discussion": "Discussion", "proposal_shared": "Proposal shared", "negotiation": "Negotiation", "drive_scheduled": "Drive scheduled", "drive_completed": "Drive completed", "offer_stage": "Offer stage", "placed": "Placed", "joined": "Joined", "on_hold": "On hold", "cancelled": "Cancelled"}
+    outlook_labels = {"positive": "Positive", "neutral": "Neutral", "negative": "Negative"}
+    drive_labels = {"not_scheduled": "Not scheduled", "tentative": "Tentative", "scheduled": "Scheduled", "completed": "Completed", "cancelled": "Cancelled"}
+    org_ids = list({str(row.get("organization_id")) for row in rows if row.get("organization_id")})
+    org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id").in_("id", org_ids).execute().data if org_ids else []
+    org_by_id = {str(item["id"]): item for item in (org_rows or [])}
+    people = profile_list_for_user_ids(list({str(row.get("placement_manager_id")) for row in rows if row.get("placement_manager_id")}))
+    names = {str(person["id"]): person["full_name"] for person in people}
+    category_rows = university_rows("company_categories", user).execute().data or []
+    category_names = {str(item["id"]): item.get("name") for item in category_rows}
+    seasons = university_rows("placement_seasons", user).execute().data or []
+    season_names = {str(item["id"]): item.get("name") or item.get("academic_year") for item in seasons}
+    can_see_company = user.get("role") in {"university_admin", "placement_manager", "data_analyst"} or has_full_crm_access(user)
+    pipeline_rows = []
+    for row in rows:
+        org = org_by_id.get(str(row.get("organization_id")), {})
+        manager_id = str(row.get("placement_manager_id"))
+        category_id = str(row.get("category_id")) if row.get("category_id") else None
+        pipeline_rows.append({
+            **row,
+            "organization_name": org.get("name") if can_see_company else "Organization activity",
+            "city": org.get("city") if can_see_company else None,
+            "industry": org.get("industry") if can_see_company else None,
+            "organization_status": org.get("status"),
+            "placement_manager_name": names.get(manager_id, "Placement manager"),
+            "season_name": season_names.get(str(row.get("season_id")), "Season"),
+            "category_name": category_names.get(category_id, "Uncategorized"),
+            "pipeline_status_label": status_labels.get(row.get("pipeline_status"), "Prospect"),
+            "outlook_label": outlook_labels.get(row.get("outlook"), "Neutral"),
+            "drive_status_label": drive_labels.get(row.get("drive_status"), "Not scheduled"),
+        })
+    status_counts = {key: 0 for key in status_labels}
+    outlook_counts = {key: 0 for key in outlook_labels}
+    drive_status_counts = {key: 0 for key in drive_labels}
+    for row in rows:
+        status_counts[row.get("pipeline_status") or "prospect"] = status_counts.get(row.get("pipeline_status") or "prospect", 0) + 1
+        outlook_counts[row.get("outlook") or "neutral"] = outlook_counts.get(row.get("outlook") or "neutral", 0) + 1
+        drive_status_counts[row.get("drive_status") or "not_scheduled"] = drive_status_counts.get(row.get("drive_status") or "not_scheduled", 0) + 1
+    overdue_followups = sum(1 for row in rows if row.get("next_follow_up_date") and str(row["next_follow_up_date"]) < today.isoformat() and row.get("pipeline_status") != "cancelled")
+    upcoming_dates = sum(1 for row in rows if row.get("expected_date") and today.isoformat() <= str(row["expected_date"]) <= (today + timedelta(days=30)).isoformat() and row.get("pipeline_status") != "cancelled")
+    by_manager: dict[str, dict[str, Any]] = {}
+    by_season: dict[str, dict[str, Any]] = {}
+    by_category: dict[str, dict[str, Any]] = {}
+    by_city: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        manager = str(row.get("placement_manager_id"))
+        item = by_manager.setdefault(manager, {"placement_manager_id": manager, **{key: 0 for key in keys}})
+        for key in keys:
+            item[key] += int(row.get(key) or 0)
+        season = str(row.get("season_id"))
+        season_item = by_season.setdefault(season, {"season_id": season, **{key: 0 for key in keys}})
+        category = str(row.get("category_id") or "uncategorized")
+        category_item = by_category.setdefault(category, {"category_id": None if category == "uncategorized" else category, "category_name": "Uncategorized" if category == "uncategorized" else category, **{key: 0 for key in keys}})
+        for key in keys:
+            season_item[key] += int(row.get(key) or 0)
+            category_item[key] += int(row.get(key) or 0)
+    manager_ids = list({str(row.get("placement_manager_id")) for row in rows if row.get("placement_manager_id")})
+    city_by_org = {str(item["id"]): item.get("city") or "Unspecified" for item in (org_rows or [])}
+    for row in rows:
+        city = city_by_org.get(str(row.get("organization_id")), "Unspecified")
+        city_item = by_city.setdefault(city, {"city": city, **{key: 0 for key in keys}})
+        for key in keys:
+            city_item[key] += int(row.get(key) or 0)
+    if by_manager:
+        for item in by_manager.values():
+            item["placement_manager_name"] = names.get(item["placement_manager_id"], "Placement manager")
+    season_names = {str(item["id"]): item.get("name") or item.get("academic_year") for item in seasons}
+    for item in by_season.values():
+        item["season_name"] = season_names.get(item["season_id"], "Season")
+    for item in by_category.values():
+        item["category_name"] = category_names.get(str(item["category_id"]), item["category_name"])
+    for target in targets:
+        manager_id = str(target.get("user_id"))
+        item = by_manager.setdefault(manager_id, {"placement_manager_id": manager_id, "placement_manager_name": names.get(manager_id, "Placement manager"), **{key: 0 for key in keys}})
+        for target_key in target_keys:
+            item[target_key] = item.get(target_key, 0) + int(target.get(target_key) or 0)
+    return {
+        "totals": totals,
+        "target_totals": target_totals,
+        "summary": {
+            "companies_in_pipeline": sum(1 for row in rows if row.get("pipeline_status") != "cancelled"),
+            "active_pipeline": sum(1 for row in rows if row.get("pipeline_status") not in {"cancelled", "joined", "placed"}),
+            "cancelled": status_counts.get("cancelled", 0),
+            "overdue_followups": overdue_followups,
+            "expected_next_30_days": upcoming_dates,
+            "positive_outlook": outlook_counts.get("positive", 0),
+            "negative_outlook": outlook_counts.get("negative", 0),
+        },
+        "status_labels": status_labels,
+        "outlook_labels": outlook_labels,
+        "drive_status_labels": drive_labels,
+        "status_counts": status_counts,
+        "outlook_counts": outlook_counts,
+        "drive_status_counts": drive_status_counts,
+        "by_manager": list(by_manager.values()),
+        "by_season": list(by_season.values()),
+        "by_category": list(by_category.values()),
+        "by_city": list(by_city.values()),
+        "rows": pipeline_rows,
+    }
+
+
+@app.get("/api/placement/access")
+def list_access_grants(user=Depends(require_roles("university_admin"))):
+    return university_rows("placement_access_grants", user).execute().data or []
+
+
+@app.post("/api/placement/access", status_code=201)
+def grant_access(payload: AccessGrantIn, user=Depends(require_roles("university_admin"))):
+    target = get_profile(payload.user_id)
+    if not target or str(target.get("university_id")) != str(user.get("university_id")) or target.get("role") != "coordinator":
+        fail("Only coordinators in your university can receive CRM access", 400)
+    permissions = {area: bool(payload.permissions.get(area)) for area in CRM_ACCESS_AREAS}
+    if payload.access_level == "full":
+        permissions = dict(FULL_CRM_PERMISSIONS)
+    elif not any(permissions.values()):
+        fail("Select at least one area for partial access", 400)
+    row = db.table("placement_access_grants").upsert({"university_id": user["university_id"], "granted_to": payload.user_id, "granted_by": user["id"], "scope": "crm", "access_level": payload.access_level, "permissions": permissions}, on_conflict="granted_to,scope").execute().data[0]
+    level_label = "Full CRM access" if payload.access_level == "full" else "Partial CRM access"
+    create_notification(payload.user_id, "crm_access_granted", level_label + " granted", f"Your university administrator granted you {payload.access_level} access to selected CRM areas.", user["university_id"], "access_grant", row["id"], "Team")
+    return row
+
+
+@app.get("/api/placement/duplicate-requests")
+def list_duplicate_requests(user=Depends(require_roles("university_admin"))):
+    return university_rows("duplicate_company_requests", user).order("created_at", desc=True).execute().data or []
+
+
+@app.patch("/api/placement/duplicate-requests/{request_id}")
+def review_duplicate_request(request_id: str, payload: DuplicateReviewIn, user=Depends(require_roles("university_admin"))):
+    rows = university_rows("duplicate_company_requests", user).eq("id", request_id).limit(1).execute().data or []
+    if not rows:
+        fail("Duplicate company request not found", 404)
+    request_row = rows[0]
+    updates = {"status": payload.status, "reviewed_by": user["id"], "review_note": payload.review_note, "reviewed_at": now().isoformat()}
+    updated = db.table("duplicate_company_requests").update(updates).eq("id", request_id).execute().data[0]
+    if payload.status == "approved":
+        body = dict(request_row.get("requested_payload") or {})
+        body["placement_manager_id"] = request_row["requested_by"]
+        body["university_id"] = user["university_id"]
+        body["duplicate_approved"] = True
+        db.table("organizations").insert(body).execute()
+    create_notification(request_row["requested_by"], "duplicate_company_reviewed", f"Duplicate company request {payload.status}", f"Your request for {request_row['requested_name']} was {payload.status}.", user["university_id"], "duplicate_company_request", request_id, "Organizations")
+    return updated

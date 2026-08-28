@@ -42,6 +42,30 @@ const defaultStages = [
   { id: "won", name: "Closed Won", color: "#10b981" },
   { id: "lost", name: "Closed Lost", color: "#ef4444" },
 ];
+const commonPlacementCities = [
+  "Ahmedabad", "Amritsar", "Aurangabad", "Bengaluru", "Bhopal", "Bhubaneswar", "Chandigarh", "Chennai", "Coimbatore", "Dehradun",
+  "Delhi", "Faridabad", "Gandhinagar", "Ghaziabad", "Goa", "Gurugram", "Guwahati", "Hyderabad", "Indore", "Jaipur",
+  "Jammu", "Jamshedpur", "Kanpur", "Kochi", "Kolkata", "Kota", "Lucknow", "Ludhiana", "Madurai", "Mangaluru",
+  "Meerut", "Mohali", "Mumbai", "Mysuru", "Nagpur", "Nashik", "Navi Mumbai", "Noida", "Patna", "Pune",
+  "Raipur", "Rajkot", "Ranchi", "Salem", "Surat", "Thane", "Thiruvananthapuram", "Udaipur", "Vadodara", "Visakhapatnam",
+];
+const placementPipelineStatuses = [
+  ["prospect", "Prospect"],
+  ["outreach", "Outreach"],
+  ["in_talks", "In talks"],
+  ["discussion", "Discussion"],
+  ["proposal_shared", "Proposal shared"],
+  ["negotiation", "Negotiation"],
+  ["drive_scheduled", "Drive scheduled"],
+  ["drive_completed", "Drive completed"],
+  ["offer_stage", "Offer stage"],
+  ["placed", "Placed"],
+  ["joined", "Joined"],
+  ["on_hold", "On hold"],
+  ["cancelled", "Cancelled"],
+];
+const placementOutlooks = [["positive", "Positive"], ["neutral", "Neutral"], ["negative", "Negative"]];
+const placementDriveStatuses = [["not_scheduled", "Not scheduled"], ["tentative", "Tentative"], ["scheduled", "Scheduled"], ["completed", "Completed"], ["cancelled", "Cancelled"]];
 const workspaceCopy = {
   company: {
     toggle: "Companies",
@@ -391,8 +415,9 @@ function App() {
 function Workspace({ role, user, profile, onLogout }) {
   const superAdmin = role === "super_admin";
   const universityAdmin = role === "university_admin";
-  const supervisor = role === "coordinator" || role === "regional_manager";
+  const supervisor = role === "coordinator";
   const placementManager = role === "placement_manager";
+  const dataAnalyst = role === "data_analyst";
   const [active, setActive] = useState("Overview"),
     [query, setQuery] = useState(""),
     [modal, setModal] = useState(profile?.must_change_password ? "password" : null),
@@ -423,6 +448,8 @@ function Workspace({ role, user, profile, onLogout }) {
     [editingCard, setEditingCard] = useState(null),
     [editingStage, setEditingStage] = useState(null),
     [editingUser, setEditingUser] = useState(null),
+    [editingUniversity, setEditingUniversity] = useState(null),
+    [placementData, setPlacementData] = useState({ seasons: [], categories: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, duplicates: [], settings: { coordinator_target_entry_enabled: false } }),
     [loaded, setLoaded] = useState(false);
   const mode = "company";
   const copy = workspaceCopy.company;
@@ -432,13 +459,42 @@ function Workspace({ role, user, profile, onLogout }) {
   const visibleContacts = contacts;
   const visibleReports = reports;
   const visibleCards = cards;
+  const loadPlacementData = async () => {
+    const [analytics, metrics, seasons, categories, cities, assignments, targets, duplicates, access, settings] = await Promise.all([
+      apiFetch("/api/placement/analytics"),
+      apiFetch("/api/placement/metrics"),
+      apiFetch("/api/placement/seasons"),
+      apiFetch("/api/placement/categories"),
+      apiFetch("/api/placement/cities"),
+      apiFetch("/api/placement/assignments"),
+      apiFetch("/api/placement/targets"),
+      universityAdmin ? apiFetch("/api/placement/duplicate-requests") : Promise.resolve([]),
+      universityAdmin ? apiFetch("/api/placement/access") : Promise.resolve([]),
+      apiFetch("/api/placement/settings"),
+    ]);
+    setPlacementData((prev) => ({
+      ...prev,
+      analytics: analytics || null,
+      metrics: metrics || [],
+      seasons: seasons || [],
+      categories: categories || [],
+      cities: cities || [],
+      assignments: assignments || [],
+      targets: targets || [],
+      duplicates: duplicates || [],
+      access: access || [],
+      settings: settings || { coordinator_target_entry_enabled: false },
+    }));
+  };
   const nav = superAdmin
     ? ["Overview", "Universities", "Users"]
-    : universityAdmin
-      ? ["Overview", "Team", organizationNav, peopleNav, "Meeting Reports"]
+      : universityAdmin
+      ? ["Overview", "Team", "Direct Team", "Placement Setup", "Analytics", "Approvals", organizationNav, peopleNav, "Meeting Reports"]
       : supervisor
-        ? ["Overview", "Team"]
-        : ["Overview", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
+        ? ["Overview", "Team", "Placement Progress", "Placement Updates"]
+        : dataAnalyst
+          ? ["Analytics"]
+          : ["Overview", "Placement Progress", organizationNav, peopleNav, "Meeting Reports", "Kanban", "Placement Metrics"];
   const refresh = async () => {
     if (!user) return;
     try {
@@ -452,6 +508,7 @@ function Workspace({ role, user, profile, onLogout }) {
         setStages(k.stages || []);
         setCards(k.cards || []);
       }
+      await loadPlacementData();
       setLastUpdated(new Date());
       setLoaded(true);
     } catch (e) {
@@ -467,22 +524,27 @@ function Workspace({ role, user, profile, onLogout }) {
         setManagers(people || []);
       } else if (supervisor || universityAdmin) {
         const teamRequests = [apiFetch("/api/team/users"), apiFetch("/api/team/overview")];
-        if (universityAdmin) {
-          teamRequests.push(
-            apiFetch("/api/organizations"),
-            apiFetch("/api/contacts"),
-            apiFetch("/api/meeting-reports"),
-          );
+        if (universityAdmin || supervisor) {
+          teamRequests.push(apiFetch("/api/organizations"));
+          if (universityAdmin) {
+            teamRequests.push(
+              apiFetch("/api/contacts"),
+              apiFetch("/api/meeting-reports"),
+            );
+          }
         }
         const [people, summary, universityOrgs, universityContacts, universityReports] = await Promise.all(teamRequests);
         setManagers(people || []);
         setTeamSummary(summary);
-        if (universityAdmin) {
+        if (universityAdmin || supervisor) {
           setOrgs(universityOrgs || []);
+        }
+        if (universityAdmin) {
           setContacts(universityContacts || []);
           setReports(universityReports || []);
         }
       }
+      if (universityAdmin || supervisor || dataAnalyst) await loadPlacementData();
       setLastUpdated(new Date());
       setLoaded(true);
     } catch (e) {
@@ -491,7 +553,7 @@ function Workspace({ role, user, profile, onLogout }) {
     }
   };
   useEffect(() => {
-    if (superAdmin || supervisor || universityAdmin) refreshManagers();
+    if (superAdmin || supervisor || universityAdmin || dataAnalyst) refreshManagers();
     else if (placementManager) refresh();
   }, [role, user?.id]);
   const refreshNotifications = async () => {
@@ -955,6 +1017,10 @@ function Workspace({ role, user, profile, onLogout }) {
           name: f.get("name"),
           code: f.get("code") || null,
           city: f.get("city"),
+          plan_name: f.get("plan_name") || "Standard",
+          plan_price: Number(f.get("plan_price") || 0),
+          plan_expires_at: f.get("plan_expires_at") || null,
+          max_accounts: Number(f.get("max_accounts") || 100),
         }),
       });
       setUniversities((prev) => [data, ...prev]);
@@ -974,6 +1040,31 @@ function Workspace({ role, user, profile, onLogout }) {
       const data = await apiFetch(`/api/admin/universities/${university.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
       setUniversities((prev) => prev.map((item) => item.id === data.id ? data : item));
       showSuccess(`University ${nextStatus === "active" ? "reactivated" : "deactivated"}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveUniversity = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    setBusy(true);
+    try {
+      const payload = {
+        name: f.get("name"),
+        code: f.get("code") || null,
+        city: f.get("city"),
+        plan_name: f.get("plan_name"),
+        plan_price: Number(f.get("plan_price") || 0),
+        plan_expires_at: f.get("plan_expires_at") || null,
+        max_accounts: Number(f.get("max_accounts") || 100),
+      };
+      const data = await apiFetch(`/api/admin/universities/${editingUniversity.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      setUniversities((prev) => prev.map((item) => item.id === data.id ? data : item));
+      setEditingUniversity(null);
+      setModal(null);
+      showSuccess("University settings updated.");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1007,9 +1098,11 @@ function Workspace({ role, user, profile, onLogout }) {
       superAdmin ? (
         <PlatformOverview universities={universities} users={managers} />
       ) : supervisor || universityAdmin ? (
-        <TeamDashboard summary={teamSummary} masked={supervisor} excludeUserId={user?.id} />
+        <TeamDashboard summary={teamSummary} analytics={placementData.analytics} masked={supervisor} excludeUserId={user?.id} />
+      ) : dataAnalyst ? (
+        <><CategoryReference categories={placementData.categories} /><PlacementAnalytics analytics={placementData.analytics} data={placementData} role={role} /></>
       ) : (
-        <Overview
+        <><Overview
           admin={false}
           mode={mode}
           orgs={visibleOrgs}
@@ -1019,14 +1112,28 @@ function Workspace({ role, user, profile, onLogout }) {
           visibleCards={visibleCards}
           stages={stages}
           managers={managers}
-        />
+        /><PlacementManagerWorkflow reports={reports} cards={cards} stages={stages} /></>
       )
     ) : superAdmin && active === "Universities" ? (
-      <UniversityDirectory universities={universities} users={managers} onAdd={() => setModal("university")} onToggleStatus={updateUniversity} />
+      <UniversityDirectory universities={universities} users={managers} onAdd={() => setModal("university")} onEdit={(university) => { setEditingUniversity(university); setModal("edit-university"); }} onToggleStatus={updateUniversity} />
     ) : superAdmin && active === "Users" ? (
       <RoleUsers users={managers} universities={universities} currentUserId={user?.id} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} />
     ) : (universityAdmin || supervisor) && active === "Team" ? (
-      <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={universityAdmin} masked={supervisor} />
+      <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={universityAdmin || role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={false} masked={supervisor} />
+    ) : universityAdmin && active === "Direct Team" ? (
+      <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} directReportsTo={user?.id} onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} onEdit={(member) => { setEditingUser(member); setModal("edit-user"); }} hierarchy={false} />
+    ) : active === "Placement Setup" ? (
+      <PlacementSetupWizard data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+    ) : universityAdmin && active === "Targets" ? (
+      <TargetEntryPanel data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+    ) : active === "Analytics" || active === "Placement Progress" ? (
+      <>{role !== "data_analyst" && <TargetProgressPanel data={placementData} users={teamSummary?.users || [...managers, profile].filter(Boolean)} />}<CategoryReference categories={placementData.categories} /><PlacementAnalytics analytics={placementData.analytics} data={placementData} role={role} /></>
+    ) : active === "Placement Updates" ? (
+      <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} /></>
+    ) : active === "Approvals" ? (
+      <DuplicateApprovals requests={placementData.duplicates} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+    ) : active === "Placement Metrics" ? (
+      <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} onRefresh={refresh} onError={setError} onSuccess={showSuccess} /></>
     ) : active === organizationNav ? (
       <Organizations
         orgs={visibleOrgs}
@@ -1116,9 +1223,9 @@ function Workspace({ role, user, profile, onLogout }) {
                 setQuery("");
               }}
             >
-              {n === "Overview" ? (
+              {n === "Overview" || n === "Analytics" || n === "Placement Progress" ? (
                 <LayoutDashboard size={18} />
-              ) : n === "Placement Managers" || n === "Users" || n === "Team" ? (
+              ) : n === "Placement Managers" || n === "Users" || n === "Team" || n === "Direct Team" ? (
                 <Users size={18} />
               ) : n === "Organizations" || n === "Universities" ? (
                 <Building2 size={18} />
@@ -1126,7 +1233,7 @@ function Workspace({ role, user, profile, onLogout }) {
                 <Users size={18} />
               ) : n === "Meeting Reports" ? (
                 <FileText size={18} />
-              ) : n === "Kanban" ? (
+              ) : n === "Kanban" || n === "Placement Metrics" ? (
                 <KanbanSquare size={18} />
               ) : (
                 <Settings size={18} />
@@ -1145,7 +1252,7 @@ function Workspace({ role, user, profile, onLogout }) {
         <header>
           <div>
             <p className="eyebrow">
-              {superAdmin ? "VEXTRA AI ADMIN" : universityAdmin ? "UNIVERSITY ADMIN" : supervisor ? "TEAM OPERATIONS" : "PLACEMENT MANAGER"}
+              {superAdmin ? "VEXTRA AI ADMIN" : universityAdmin ? "UNIVERSITY ADMIN" : dataAnalyst ? "PLACEMENT ANALYTICS" : supervisor ? "TEAM OPERATIONS" : "PLACEMENT MANAGER"}
             </p>
             <h1>{active}</h1>
           </div>
@@ -1179,13 +1286,13 @@ function Workspace({ role, user, profile, onLogout }) {
           {error && (
             <div className="error-banner">
               {error}
-              <div className="error-actions"><button type="button" className="text-btn" onClick={() => { setError(""); if (superAdmin || supervisor || universityAdmin) refreshManagers(); else refresh(); }}>Retry</button><button type="button" aria-label="Dismiss error" onClick={() => setError("")}>
+              <div className="error-actions"><button type="button" className="text-btn" onClick={() => { setError(""); if (superAdmin || supervisor || universityAdmin || dataAnalyst) refreshManagers(); else refresh(); }}>Retry</button><button type="button" aria-label="Dismiss error" onClick={() => setError("")}>
                 <X size={15} />
               </button></div>
             </div>
           )}
           {success && <div className="success-banner"><CheckCheck size={15} />{success}<button type="button" aria-label="Dismiss success" onClick={() => setSuccess("")}><X size={15} /></button></div>}
-          {lastUpdated && <div className="last-updated"><Clock3 size={13} />Updated {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<button className="text-btn" onClick={() => { if (superAdmin || supervisor || universityAdmin) refreshManagers(); else refresh(); }}><RefreshCw size={13} />Refresh</button></div>}
+          {lastUpdated && <div className="last-updated"><Clock3 size={13} />Updated {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<button className="text-btn" onClick={() => { if (superAdmin || supervisor || universityAdmin || dataAnalyst) refreshManagers(); else refresh(); }}><RefreshCw size={13} />Refresh</button></div>}
           {content}
         </section>
       </main>
@@ -1206,7 +1313,11 @@ function Workspace({ role, user, profile, onLogout }) {
                 defaultValue={editingOrg?.industry || ""}
                 placeholder={copy.focusPlaceholder}
               />
-              <Field label="City" name="city" defaultValue={editingOrg?.city || ""} placeholder="Bengaluru" />
+              <Select label="City" name="city" defaultValue={editingOrg?.city || ""}>
+                <option value="">Choose an allowed city</option>
+                {editingOrg?.city && !(placementData.cities || []).some((item) => item.city === editingOrg.city) && <option value={editingOrg.city}>{editingOrg.city} (current)</option>}
+                {(placementData.cities || []).map((item) => <option key={item.id} value={item.city}>{item.city}</option>)}
+              </Select>
             </div>
             <Field
               label="Expected CTC"
@@ -1518,9 +1629,9 @@ function Workspace({ role, user, profile, onLogout }) {
               ) : (
                 <>
                   {universityAdmin && <option value="coordinator">Coordinator</option>}
-                  {universityAdmin && <option value="regional_manager">Regional manager</option>}
+                  {universityAdmin && <option value="data_analyst">Data analyst</option>}
                   {(universityAdmin || role === "coordinator") && <option value="placement_manager">Placement manager</option>}
-                  {role === "coordinator" && <option value="regional_manager">Regional manager</option>}
+                  {role === "coordinator" && null}
                 </>
               )}
             </Select>
@@ -1555,7 +1666,35 @@ function Workspace({ role, user, profile, onLogout }) {
               <Field label="University code" name="code" placeholder="VIT" required={false} />
               <Field label="City" name="city" placeholder="Vellore" />
             </div>
+            <div className="form-grid">
+              <Field label="Plan name" name="plan_name" defaultValue="Standard" />
+              <Field label="Plan price" name="plan_price" type="number" min="0" step="0.01" defaultValue="0" />
+            </div>
+            <div className="form-grid">
+              <Field label="Plan expiry (warning only)" name="plan_expires_at" type="date" required={false} />
+              <Field label="Maximum accounts" name="max_accounts" type="number" min="1" defaultValue="100" />
+            </div>
             <FormActions onClose={() => setModal(null)} busy={busy} />
+          </form>
+        </Modal>
+      )}
+      {modal === "edit-university" && editingUniversity && (
+        <Modal title={`Edit ${editingUniversity.name}`} onClose={() => { setModal(null); setEditingUniversity(null); }}>
+          <form onSubmit={saveUniversity}>
+            <Field label="University name" name="name" defaultValue={editingUniversity.name || ""} />
+            <div className="form-grid">
+              <Field label="University code" name="code" required={false} defaultValue={editingUniversity.code || ""} />
+              <Field label="City" name="city" defaultValue={editingUniversity.city || ""} />
+            </div>
+            <div className="form-grid">
+              <Field label="Plan name" name="plan_name" defaultValue={editingUniversity.plan_name || "Standard"} />
+              <Field label="Plan price" name="plan_price" type="number" min="0" step="0.01" defaultValue={editingUniversity.plan_price || 0} />
+            </div>
+            <div className="form-grid">
+              <Field label="Plan expiry (warning only)" name="plan_expires_at" type="date" required={false} defaultValue={editingUniversity.plan_expires_at || ""} />
+              <Field label="Maximum accounts" name="max_accounts" type="number" min="1" defaultValue={editingUniversity.max_accounts || 100} />
+            </div>
+            <FormActions onClose={() => { setModal(null); setEditingUniversity(null); }} busy={busy} />
           </form>
         </Modal>
       )}
@@ -1577,19 +1716,29 @@ function PlatformOverview({ universities, users }) {
   const activeUniversities = universities.filter((item) => item.status === "active").length;
   const admins = users.filter((item) => item.role === "university_admin").length;
   const members = users.filter((item) => item.role !== "super_admin").length;
+  const totalCapacity = universities.reduce((sum, item) => sum + Number(item.max_accounts || 100), 0);
+  const usedCapacity = universities.reduce((sum, item) => sum + users.filter((user) => String(user.university_id) === String(item.id)).length, 0);
+  const expiryCutoff = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const expiringUniversities = universities.filter((item) => item.plan_expires_at && new Date(`${item.plan_expires_at}T23:59:59`).getTime() <= expiryCutoff).length;
+  const capacityPercent = totalCapacity ? Math.min(100, Math.round((usedCapacity / totalCapacity) * 100)) : 0;
   return <>
     <div className="report-stats">
       <div className="stat"><span>Universities</span><strong>{universities.length}</strong><small>{activeUniversities} active</small></div>
       <div className="stat"><span>University admins</span><strong>{admins}</strong><small>Assigned access</small></div>
       <div className="stat"><span>Team accounts</span><strong>{members}</strong><small>Managed by universities</small></div>
-      <div className="stat"><span>Active accounts</span><strong>{users.filter((item) => item.status === "active").length}</strong><small>Current access</small></div>
+      <div className="stat"><span>Active accounts</span><strong>{users.filter((item) => item.role !== "super_admin" && item.status === "active").length}</strong><small>Current university access</small></div>
+      <div className="stat"><span>Account capacity</span><strong>{usedCapacity} / {totalCapacity}</strong><small>{capacityPercent}% allocated</small></div>
+      <div className="stat"><span>Expiry warnings</span><strong className={expiringUniversities ? "warning-number" : ""}>{expiringUniversities}</strong><small>Within 30 days or expired</small></div>
     </div>
-    <div className="toolbar"><div><p className="eyebrow">VEXTRA AI CONTROL PLANE</p><h2>University network</h2><p className="muted">Create university tenants and assign their administrators.</p></div></div>
+    <div className="toolbar"><div><p className="eyebrow">VEXTRA AI CONTROL PLANE</p><h2>University network</h2><p className="muted">Create university tenants and assign their administrators. Expiry is a warning only; it never blocks access.</p></div></div>
+    <div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">SUBSCRIPTION & ACCOUNT USAGE</p><h3>University network</h3><span className="muted">Plan, account capacity, active team, and expiry information. Expiry warnings never block access.</span></div></div><div className="team-table-scroll"><table><thead><tr><th>University</th><th>Plan</th><th>Accounts used</th><th>Allowed</th><th>Usage</th><th>Active team</th><th>Expiry</th></tr></thead><tbody>{universities.map((item) => { const tenantUsers = users.filter((user) => String(user.university_id) === String(item.id)); const used = tenantUsers.length; const max = Number(item.max_accounts || 100); const expiry = item.plan_expires_at ? new Date(`${item.plan_expires_at}T23:59:59`) : null; const expired = expiry && expiry.getTime() < Date.now(); const soon = expiry && !expired && expiry.getTime() <= expiryCutoff; return <tr key={item.id}><td><b>{item.name}</b><small>{item.city || "No city configured"}</small></td><td>{item.plan_name || "Standard"}</td><td>{used}</td><td>{max}</td><td><div className="usage-bar"><span style={{ width: `${Math.min(100, Math.round((used / max) * 100))}%` }} /></div><small>{Math.round((used / max) * 100)}% allocated</small></td><td>{tenantUsers.filter((user) => user.status === "active").length}</td><td><span className={expired ? "danger-number" : soon ? "warning-number" : ""}>{item.plan_expires_at || "Not configured"}</span>{(expired || soon) && <small>{expired ? "Expired — warning only" : "Expires soon"}</small>}</td></tr>; })}</tbody></table></div></div>
   </>;
 }
 
-function TeamDashboard({ summary, masked, excludeUserId }) {
+function TeamDashboard({ summary, analytics, masked, excludeUserId }) {
   const totals = summary?.totals || {};
+  const placementTotals = analytics?.totals || {};
+  const placementSummary = analytics?.summary || {};
   const users = (summary?.users || []).filter((item) => !excludeUserId || String(item.id) !== String(excludeUserId));
   return <>
     <div className="report-stats">
@@ -1598,29 +1747,39 @@ function TeamDashboard({ summary, masked, excludeUserId }) {
       <div className="stat"><span>Meeting reports</span><strong>{totals.reports || 0}</strong><small>{totals.pending_actions || 0} pending actions</small></div>
       <div className="stat"><span>Overdue follow-ups</span><strong className={totals.overdue_reports ? "danger-number" : ""}>{totals.overdue_reports || 0}</strong><small>{totals.cards || 0} pipeline cards</small></div>
     </div>
+    <div className="panel analytics-pulse"><div><p className="eyebrow">PLACEMENT PULSE</p><h3>What is happening across the university</h3><p className="muted">Live pipeline signals from coordinator and placement-manager updates.</p></div><div className="analytics-pulse-grid"><div><span>Companies in pipeline</span><strong>{placementSummary.companies_in_pipeline || 0}</strong></div><div><span>Drives completed</span><strong>{placementTotals.drives_conducted || 0}</strong></div><div><span>Students placed</span><strong>{placementTotals.students_placed || 0}</strong></div><div><span>Needs attention</span><strong className={placementSummary.negative_outlook || placementSummary.overdue_followups ? "danger-number" : ""}>{(placementSummary.negative_outlook || 0) + (placementSummary.overdue_followups || 0)}</strong></div></div></div>
     <div className="panel table-panel">
       <div className="table-head"><h3>Team activity</h3><span className="muted">{masked ? "Organization and contact identities are masked." : "University-wide activity overview."}</span></div>
       <TeamTable users={users} masked={masked} />
     </div>
+    <div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">WORKLOAD</p><h3>Overdue follow-up queue</h3></div></div><table><thead><tr><th>Team member</th><th>Pending</th><th>Overdue</th><th>Status</th></tr></thead><tbody>{users.filter((item) => (item.overdue_followups || 0) > 0 || (item.pending_actions || 0) > 0).map((item) => <tr key={item.id}><td>{item.full_name}</td><td>{item.pending_actions || 0}</td><td className={item.overdue_followups ? "danger-number" : ""}>{item.overdue_followups || 0}</td><td>{item.report_status || "Not tracked"}</td></tr>)}</tbody></table>{!users.some((item) => (item.overdue_followups || 0) > 0 || (item.pending_actions || 0) > 0) && <div className="empty-state"><p className="muted">No overdue follow-ups.</p></div>}</div>
   </>;
+}
+
+function PlacementManagerWorkflow({ reports = [], cards = [], stages = [] }) {
+  const [selected, setSelected] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const upcoming = [...reports].sort((a, b) => String(a.meeting_date).localeCompare(String(b.meeting_date))).filter((item) => item.meeting_date >= new Date().toISOString().slice(0, 10)).slice(0, 6);
+  const dueCards = cards.filter((item) => item.due_date).sort((a, b) => String(a.due_date).localeCompare(String(b.due_date))).slice(0, 6);
+  const bulkMove = async () => { if (!selected.length || !stages.length) return; setBusy(true); try { await Promise.all(selected.map((id) => apiFetch(`/api/kanban/cards/${id}`, { method: "PATCH", body: JSON.stringify({ stage_id: stages[0].id }) }))); setSelected([]); } finally { setBusy(false); } };
+  return <div className="two-column"><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">DRIVE CALENDAR</p><h3>Upcoming meetings and drives</h3></div></div><table><thead><tr><th>Date</th><th>Title</th><th>Company</th></tr></thead><tbody>{upcoming.map((item) => <tr key={item.id}><td>{item.meeting_date}</td><td>{item.title || "Meeting report"}</td><td>{item.organization_name || "Company"}</td></tr>)}</tbody></table>{!upcoming.length && <div className="empty-state"><p className="muted">No upcoming drives scheduled.</p></div>}</div><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">FOLLOW-UP REMINDERS</p><h3>Due pipeline work</h3></div><button className="btn secondary" disabled={!selected.length || busy} onClick={bulkMove}>Move selected to first stage</button></div><table><thead><tr><th /><th>Work item</th><th>Due</th><th>Priority</th></tr></thead><tbody>{dueCards.map((item) => <tr key={item.id}><td><input type="checkbox" checked={selected.includes(item.id)} onChange={(e) => setSelected((current) => e.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} aria-label={`Select ${item.title}`} /></td><td>{item.title}</td><td className={item.due_date < new Date().toISOString().slice(0, 10) ? "danger-number" : ""}>{item.due_date}</td><td>{item.priority || "medium"}</td></tr>)}</tbody></table>{!dueCards.length && <div className="empty-state"><p className="muted">No dated follow-ups.</p></div>}</div></div>;
 }
 
 function TeamTable({ users, masked }) {
   return <div className="team-table-scroll" role="region" aria-label="Team activity table" tabIndex="0"><table className="team-activity-table"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Organizations</th><th>Contacts</th><th>Reports</th><th>Last report</th><th>Follow-ups</th><th>Report tracking</th><th>Pipeline</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b><small>{item.email}</small></td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.organization_count ?? 0}{masked && <small> masked</small>}</td><td>{item.contact_count ?? 0}{masked && <small> masked</small>}</td><td>{item.report_count ?? 0}</td><td>{item.last_report_date ? new Date(item.last_report_date).toLocaleDateString() : "Never"}</td><td><span className={item.overdue_followups ? "danger-number" : ""}>{item.overdue_followups ?? 0} overdue</span><small>{item.pending_actions ?? 0} pending action{item.pending_actions === 1 ? "" : "s"}</small></td><td><span className={`report-status ${String(item.report_status || "").toLowerCase().replaceAll(" ", "-")}`}>{item.report_status || "Not tracked"}</span></td><td>{item.card_count ?? 0}</td></tr>)}</tbody></table></div>;
 }
 
-function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
+function RoleUsers({ users, universities = [], currentUserId, directReportsTo, onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [universityFilter, setUniversityFilter] = useState("");
   const [loginFilter, setLoginFilter] = useState("");
-  const [passwordFilter, setPasswordFilter] = useState("");
   const [expanded, setExpanded] = useState({});
   const [selectedAccount, setSelectedAccount] = useState(null);
   const names = new Map(users.map((item) => [String(item.id), item.full_name]));
   const universityNames = new Map(universities.map((item) => [String(item.id), item.name]));
-  const directoryUsers = (superAdmin ? users.filter((item) => item.role !== "super_admin") : users).filter((item) => !currentUserId || String(item.id) !== String(currentUserId));
+  const directoryUsers = (superAdmin ? users.filter((item) => item.role !== "super_admin") : users).filter((item) => (!currentUserId || String(item.id) !== String(currentUserId)) && (directReportsTo === undefined || String(item.reports_to) === String(directReportsTo)));
   const canDeactivate = (item) => onDeactivate && (superAdmin || item.role !== "university_admin");
   const roleLabel = (role) => role.replaceAll("_", " ");
   const matches = (item) => {
@@ -1631,25 +1790,27 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
       && (!statusFilter || item.status === statusFilter)
       && (!universityFilter || String(item.university_id) === universityFilter)
       && (!loginFilter || (loginFilter === "never" ? !item.last_login_at : Boolean(item.last_login_at)))
-      && (!passwordFilter || (passwordFilter === "required" ? item.must_change_password : !item.must_change_password));
+      ;
   };
   const filteredUsers = directoryUsers.filter(matches);
   const accountActions = (item) => (
     <div className="actions">
-      {item.status === "active" && onEdit && <button className="text-btn" onClick={() => onEdit(item)}><Pencil size={13} />Edit</button>}
+      {onEdit && <button className="text-btn" onClick={() => onEdit(item)}><Pencil size={13} />Edit</button>}
       {item.status === "active" && item.role !== "super_admin" && canDeactivate(item) && <button className="delete-btn" onClick={() => onDeactivate(item.id)}>Deactivate</button>}
       {item.status === "inactive" && item.role !== "super_admin" && onReactivate && <button className="text-btn" onClick={() => onReactivate(item.id)}>Reactivate</button>}
       {item.status === "active" && onRemove && <button className="delete-btn" onClick={() => onRemove(item)}>Remove</button>}
     </div>
   );
+  const roleOrder = { university_admin: 0, coordinator: 1, placement_manager: 2, data_analyst: 3 };
+  const sortAccounts = (items) => [...items].sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9) || String(a.full_name || "").localeCompare(String(b.full_name || "")));
   const accountRow = (item, depth = 0) => <tr key={item.id}>
-    <td><div style={{ paddingLeft: `${depth * 24}px` }}>{superAdmin ? <button className="account-name-button" onClick={() => setSelectedAccount(item)}><b>{item.full_name}</b><small>{item.email}</small></button> : <><b>{item.full_name}</b><small>{item.email}</small></>}</div></td>
+    <td><div className={depth ? "hierarchy-name hierarchy-child" : "hierarchy-name"} style={{ paddingLeft: `${depth * 24}px` }}>{superAdmin ? <button className="account-name-button" onClick={() => setSelectedAccount(item)}><b>{item.full_name}</b><small>{item.email}</small></button> : <><b>{item.full_name}</b><small>{item.email}</small></>}</div></td>
     <td>{roleLabel(item.role)}</td>
     <td><span className={`badge ${item.status}`}>{item.status}</span></td>
     <td>{item.reports_to_name || (item.reports_to ? names.get(String(item.reports_to)) || "Assigned manager" : "—")}</td>
     <td>{accountActions(item)}</td>
   </tr>;
-  const universityGroups = universities.map((university) => ({
+  const universityGroups = [...universities].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))).map((university) => ({
     ...university,
     admin: filteredUsers.find((item) => String(item.university_id) === String(university.id) && item.role === "university_admin"),
     members: filteredUsers.filter((item) => String(item.university_id) === String(university.id) && item.role !== "university_admin"),
@@ -1657,15 +1818,21 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
   })).filter((group) => group.admin || group.members.length || (!search && !roleFilter && !statusFilter && !universityFilter));
   const unassigned = filteredUsers.filter((item) => !item.university_id);
   const hierarchyChildren = new Map();
+  const hasVisibleParent = (item) => {
+    if (!item.reports_to) return false;
+    const parent = filteredUsers.find((candidate) => String(candidate.id) === String(item.reports_to));
+    if (!parent) return false;
+    return !item.reports_to_name || String(item.reports_to_name).trim().toLowerCase() === String(parent.full_name || "").trim().toLowerCase();
+  };
   filteredUsers.forEach((item) => {
-    if (item.reports_to) {
+    if (hasVisibleParent(item)) {
       const parentId = String(item.reports_to);
       hierarchyChildren.set(parentId, [...(hierarchyChildren.get(parentId) || []), item]);
     }
   });
-  const hierarchyRoots = filteredUsers.filter((item) => !item.reports_to || !filteredUsers.some((candidate) => String(candidate.id) === String(item.reports_to)));
+  const hierarchyRoots = sortAccounts(filteredUsers.filter((item) => !hasVisibleParent(item)));
   const hierarchyDescendants = (item) => (hierarchyChildren.get(String(item.id)) || []).reduce((total, child) => total + 1 + hierarchyDescendants(child), 0);
-  const hierarchyRows = (item, depth = 0) => <React.Fragment key={`${item.id}-${depth}`}>{accountRow(item, depth)}{(hierarchyChildren.get(String(item.id)) || []).map((child) => hierarchyRows(child, depth + 1))}</React.Fragment>;
+  const hierarchyRows = (item, depth = 0) => <React.Fragment key={`${item.id}-${depth}`}>{accountRow(item, depth)}{sortAccounts(hierarchyChildren.get(String(item.id)) || []).map((child) => hierarchyRows(child, depth + 1))}</React.Fragment>;
   const exportAccounts = () => {
     const header = ["Name", "Email", "Role", "Status", "University", "Reports to", "Created", "Last login", "Password change required"];
     const rows = filteredUsers.map((item) => [item.full_name, item.email, roleLabel(item.role), item.status, universityNames.get(String(item.university_id)) || "", item.reports_to_name || names.get(String(item.reports_to)) || "", item.created_at || "", item.last_login_at || "", item.must_change_password ? "Yes" : "No"]);
@@ -1677,9 +1844,9 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
     link.click();
     URL.revokeObjectURL(url);
   };
-  const clearFilters = () => { setSearch(""); setRoleFilter(""); setStatusFilter(""); setUniversityFilter(""); setLoginFilter(""); setPasswordFilter(""); };
+  const clearFilters = () => { setSearch(""); setRoleFilter(""); setStatusFilter(""); setUniversityFilter(""); setLoginFilter(""); };
   return <>
-    <div className="toolbar"><div><p className="eyebrow">ACCESS DIRECTORY</p><h2>{superAdmin ? "All accounts" : "Team members"}</h2><p className="muted">{masked ? "Progress is visible while organization identities remain protected." : "Manage access within your authorized scope."}</p></div>{onAdd && <button className="btn primary" onClick={onAdd}><Plus size={17}/> Add account</button>}</div>
+    <div className="toolbar"><div><p className="eyebrow">ACCESS DIRECTORY</p><h2>{superAdmin ? "All accounts" : directReportsTo !== undefined ? "My direct team" : "Team members"}</h2><p className="muted">{masked ? "Progress is visible while organization identities remain protected." : directReportsTo !== undefined ? "Placement managers and coordinators who report directly to you." : "Manage access within your authorized scope."}</p></div>{onAdd && <button className="btn primary" onClick={onAdd}><Plus size={17}/> Add account</button>}</div>
     <div className="directory-toolbar panel">
       <div className="search directory-search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search all accounts by name or email" aria-label="Search all accounts" /></div>
       <select className="filter" value={universityFilter} onChange={(e) => setUniversityFilter(e.target.value)} aria-label="Filter by university">
@@ -1688,13 +1855,13 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
       </select>
       <select className="filter" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} aria-label="Filter by role">
         <option value="">All roles</option>
-        {["university_admin", "coordinator", "regional_manager", "placement_manager", ...(superAdmin ? [] : ["super_admin"])].map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
+        {["university_admin", "coordinator", "placement_manager", "data_analyst", ...(superAdmin ? [] : ["super_admin"])].map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
       </select>
       <select className="filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by account status">
         <option value="">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option>
       </select>
-      {superAdmin && <><select className="filter" value={loginFilter} onChange={(e) => setLoginFilter(e.target.value)} aria-label="Filter by last login"><option value="">Any login state</option><option value="never">Never logged in</option><option value="logged_in">Has logged in</option></select><select className="filter" value={passwordFilter} onChange={(e) => setPasswordFilter(e.target.value)} aria-label="Filter by password state"><option value="">Any password state</option><option value="required">Change required</option><option value="complete">Password updated</option></select><button className="btn secondary" onClick={exportAccounts}><Download size={15} />Export CSV</button></>}
-      {(search || roleFilter || statusFilter || universityFilter || loginFilter || passwordFilter) && <button className="text-btn" onClick={clearFilters}>Clear filters</button>}
+      {superAdmin && <><select className="filter" value={loginFilter} onChange={(e) => setLoginFilter(e.target.value)} aria-label="Filter by last login"><option value="">Any login state</option><option value="never">Never logged in</option><option value="logged_in">Has logged in</option></select><button className="btn secondary" onClick={exportAccounts}><Download size={15} />Export CSV</button></>}
+      {(search || roleFilter || statusFilter || universityFilter || loginFilter) && <button className="text-btn" onClick={clearFilters}>Clear filters</button>}
     </div>
     {superAdmin ? <div className="account-directory">
       {universityGroups.map((group) => {
@@ -1705,10 +1872,10 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
             <div className="university-admin-meta">{group.admin ? <><span className={`badge ${group.admin.status}`}>{group.admin.status}</span>{accountActions(group.admin)}</> : <span className="muted">{group.totalMembers} account{group.totalMembers === 1 ? "" : "s"}</span>}</div>
           </div>
           <div className="university-group-footer"><span>{group.members.length} team account{group.members.length === 1 ? "" : "s"}{group.members.length !== group.totalMembers && " matching filters"}</span><button className="text-btn" aria-expanded={Boolean(isOpen)} onClick={() => setExpanded((prev) => ({ ...prev, [group.id]: !prev[group.id] }))}>{isOpen ? "Hide accounts" : "View accounts"}</button></div>
-          {isOpen && <div className="directory-table"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{group.members.map(accountRow)}</tbody></table>{!group.members.length && <div className="empty-state"><p className="muted">No team accounts match the current filters.</p></div>}</div>}
+          {isOpen && <div className="directory-table"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{sortAccounts(group.members).map((item) => accountRow(item, 0))}</tbody></table>{!group.members.length && <div className="empty-state"><p className="muted">No team accounts match the current filters.</p></div>}</div>}
         </section>;
       })}
-      {unassigned.length > 0 && <section className="university-account-group panel"><div className="university-admin-row"><div><p className="eyebrow">UNASSIGNED ACCOUNTS</p><h3>Platform accounts</h3><p className="muted">Accounts without a university assignment.</p></div></div><div className="directory-table"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{unassigned.map(accountRow)}</tbody></table></div></section>}
+      {unassigned.length > 0 && <section className="university-account-group panel"><div className="university-admin-row"><div><p className="eyebrow">UNASSIGNED ACCOUNTS</p><h3>Platform accounts</h3><p className="muted">Accounts without a university assignment.</p></div></div><div className="directory-table"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{unassigned.map((item) => accountRow(item, 0))}</tbody></table></div></section>}
       {!universityGroups.length && !unassigned.length && <div className="empty-state panel"><h3>No accounts found</h3><p className="muted">Try changing your search or filters.</p></div>}
     </div> : hierarchy ? <div className="account-directory team-hierarchy">
       {hierarchyRoots.map((root) => {
@@ -1725,7 +1892,7 @@ function RoleUsers({ users, universities = [], currentUserId, onAdd, onDeactivat
         </section>;
       })}
       {!hierarchyRoots.length && <div className="empty-state panel"><h3>No team accounts found</h3><p className="muted">Try changing your search or filters.</p></div>}
-    </div> : <div className="panel table-panel"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{filteredUsers.map((item) => <tr key={item.id}><td><b>{item.full_name}</b></td><td>{item.email}</td><td>{roleLabel(item.role)}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.reports_to_name || (item.reports_to ? names.get(String(item.reports_to)) || "Assigned manager" : "—")}</td><td>{accountActions(item)}</td></tr>)}</tbody></table>{!filteredUsers.length && <div className="empty-state"><p className="muted">No accounts match the current filters.</p></div>}</div>}
+    </div> : <div className="panel table-panel"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{sortAccounts(filteredUsers).map((item) => <tr key={item.id}><td><b>{item.full_name}</b></td><td>{item.email}</td><td>{roleLabel(item.role)}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.reports_to_name || (item.reports_to ? names.get(String(item.reports_to)) || "Assigned manager" : "—")}</td><td>{accountActions(item)}</td></tr>)}</tbody></table>{!filteredUsers.length && <div className="empty-state"><p className="muted">No accounts match the current filters.</p></div>}</div>}
     {superAdmin && selectedAccount && <AccountDetailDrawer account={selectedAccount} universities={universities} names={names} onClose={() => setSelectedAccount(null)} />}
   </>;
 }
@@ -1773,7 +1940,7 @@ function GlobalSearch({ query, setQuery, results, loading, onClose, onSelect }) 
   </div>;
 }
 
-function UniversityDirectory({ universities, users, onAdd, onToggleStatus }) {
+function UniversityDirectory({ universities, users, onAdd, onEdit, onToggleStatus }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [city, setCity] = useState("");
@@ -1788,7 +1955,7 @@ function UniversityDirectory({ universities, users, onAdd, onToggleStatus }) {
   return <>
     <div className="toolbar"><div><p className="eyebrow">TENANT MANAGEMENT</p><h2>Universities</h2><p className="muted">Each university receives its own administrative scope.</p></div><button className="btn primary" onClick={onAdd}><Plus size={17}/> Add university</button></div>
     <div className="directory-toolbar panel"><div className="search directory-search"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search universities" aria-label="Search universities" /></div><select className="filter" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter universities by status"><option value="">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select><select className="filter" value={city} onChange={(e) => setCity(e.target.value)} aria-label="Filter universities by city"><option value="">All cities</option>{cities.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
-    <div className="panel table-panel"><table><thead><tr><th>University</th><th>Admin</th><th>Accounts</th><th>Code</th><th>City</th><th>Status</th><th>Created</th><th /></tr></thead><tbody>{rows.map((item) => { const admin = users.find((user) => String(user.university_id) === String(item.id) && user.role === "university_admin"); const accountCount = users.filter((user) => String(user.university_id) === String(item.id)).length; return <tr key={item.id}><td><button className="account-name-button" onClick={() => setSelected(item)}><b>{item.name}</b></button></td><td>{admin?.full_name || <span className="muted">Unassigned</span>}</td><td>{accountCount}</td><td>{item.code || "—"}</td><td>{item.city}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.created_at ? new Date(item.created_at).toLocaleDateString() : "Today"}</td><td><button className={item.status === "active" ? "delete-btn" : "text-btn"} onClick={() => onToggleStatus(item)}>{item.status === "active" ? "Deactivate" : "Reactivate"}</button></td></tr>; })}</tbody></table>{!rows.length && <div className="empty-state"><h3>No universities found</h3><p className="muted">Try changing your search or filters.</p></div>}</div>
+    <div className="panel table-panel"><div className="team-table-scroll"><table><thead><tr><th>University</th><th>Admin</th><th>Plan</th><th>Accounts used</th><th>Allowed accounts</th><th>Expiry</th><th>Code</th><th>City</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>{rows.map((item) => { const admin = users.find((user) => String(user.university_id) === String(item.id) && user.role === "university_admin"); const accountCount = users.filter((user) => String(user.university_id) === String(item.id)).length; const expiry = item.plan_expires_at ? new Date(`${item.plan_expires_at}T23:59:59`) : null; const expired = expiry && expiry.getTime() < Date.now(); const soon = expiry && !expired && expiry.getTime() <= Date.now() + 30 * 24 * 60 * 60 * 1000; return <tr key={item.id}><td><button className="account-name-button" onClick={() => setSelected(item)}><b>{item.name}</b></button></td><td>{admin?.full_name || <span className="muted">Unassigned</span>}</td><td>{item.plan_name || "Standard"}</td><td>{accountCount}</td><td>{item.max_accounts || 100}</td><td><span className={expired ? "danger-number" : soon ? "warning-number" : ""}>{item.plan_expires_at || "Not configured"}</span>{(expired || soon) && <small>{expired ? "Expired — warning only" : "Expires soon"}</small>}</td><td>{item.code || "—"}</td><td>{item.city}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.created_at ? new Date(item.created_at).toLocaleDateString() : "Today"}</td><td><div className="actions"><button className="text-btn" onClick={() => onEdit(item)}><Pencil size={13} />Edit</button><button className={item.status === "active" ? "delete-btn" : "text-btn"} onClick={() => onToggleStatus(item)}>{item.status === "active" ? "Deactivate" : "Reactivate"}</button></div></td></tr>; })}</tbody></table></div>{!rows.length && <div className="empty-state"><h3>No universities found</h3><p className="muted">Try changing your search or filters.</p></div>}</div>
     {selected && <UniversityDetailDrawer university={selected} users={users} onClose={() => setSelected(null)} />}
   </>;
 }
@@ -1798,7 +1965,7 @@ function UniversityDetailDrawer({ university, users, onClose }) {
   useDialogBehavior(drawerRef, onClose);
   const accounts = users.filter((item) => String(item.university_id) === String(university.id));
   const admin = accounts.find((item) => item.role === "university_admin");
-  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="university-drawer-title"><div className="drawer-head"><div><p className="eyebrow">UNIVERSITY DETAILS</p><h2 id="university-drawer-title">{university.name}</h2></div><button type="button" className="icon-btn" aria-label="Close university details" onClick={onClose}><X size={18} /></button></div><div className="drawer-status"><span className={`badge ${university.status}`}>{university.status}</span><span className="role-pill">{accounts.length} accounts</span></div><dl className="detail-list"><div><dt>Code</dt><dd>{university.code || "—"}</dd></div><div><dt>City</dt><dd>{university.city || "—"}</dd></div><div><dt>University admin</dt><dd>{admin ? `${admin.full_name} · ${admin.email}` : "Not assigned"}</dd></div><div><dt>Created</dt><dd>{university.created_at ? new Date(university.created_at).toLocaleString() : "—"}</dd></div></dl><div className="drawer-note"><Users size={16} /><span>{accounts.filter((item) => item.status === "active").length} active account(s) and {accounts.filter((item) => item.status === "inactive").length} inactive account(s).</span></div></aside></div>;
+  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside ref={drawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="university-drawer-title"><div className="drawer-head"><div><p className="eyebrow">UNIVERSITY DETAILS</p><h2 id="university-drawer-title">{university.name}</h2></div><button type="button" className="icon-btn" aria-label="Close university details" onClick={onClose}><X size={18} /></button></div><div className="drawer-status"><span className={`badge ${university.status}`}>{university.status}</span><span className="role-pill">{accounts.length}/{university.max_accounts || 100} accounts</span></div><dl className="detail-list"><div><dt>Code</dt><dd>{university.code || "—"}</dd></div><div><dt>City</dt><dd>{university.city || "—"}</dd></div><div><dt>Plan</dt><dd>{university.plan_name || "Standard"}</dd></div><div><dt>Plan expiry</dt><dd>{university.plan_expires_at || "Not configured"}</dd></div><div><dt>University admin</dt><dd>{admin ? `${admin.full_name} · ${admin.email}` : "Not assigned"}</dd></div><div><dt>Created</dt><dd>{university.created_at ? new Date(university.created_at).toLocaleString() : "—"}</dd></div></dl><div className="drawer-note"><Users size={16} /><span>{accounts.filter((item) => item.status === "active").length} active account(s) and {accounts.filter((item) => item.status === "inactive").length} inactive account(s).</span></div></aside></div>;
 }
 
 function Overview({ admin, mode, orgs, contacts, reports, cards, visibleCards, stages, managers }) {
@@ -2345,6 +2512,251 @@ function SettingsPage() {
       </div>
     </div>
   );
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
+}
+
+function CategoryReference({ categories = [] }) {
+  return <div className="panel category-reference"><div className="panel-head"><div><p className="eyebrow">UNIVERSITY CATEGORIES</p><h3>Available company bands</h3><span className="muted">Defined by your University Admin</span></div></div>{categories.length ? <div className="category-reference-grid">{categories.map((item) => <div className="category-reference-item" key={item.id}><b>{item.name}</b><span>{item.min_ctc_lpa ?? 0}–{item.max_ctc_lpa ?? "No upper limit"} LPA</span>{item.description && <small>{item.description}</small>}</div>)}</div> : <p className="muted">No company categories have been configured by your University Admin yet.</p>}</div>;
+}
+
+function TargetProgressPanel({ data = {}, users = [] }) {
+  const targets = data.targets || [];
+  const metrics = data.metrics || [];
+  const valueFor = (target, key) => metrics.filter((item) => String(item.season_id) === String(target.season_id) && String(item.placement_manager_id) === String(target.user_id) && String(item.category_id || "") === String(target.category_id || "")).reduce((total, item) => total + Number(item[key] || 0), 0);
+  return <div className="panel table-panel target-progress-panel"><div className="panel-head"><div><p className="eyebrow">ADMIN-DECLARED TARGETS</p><h3>Your placement targets</h3><span className="muted">Targets are set by the University Admin. Update actual drives and placements in Placement Updates.</span></div></div><table><thead><tr><th>Season</th><th>Manager</th><th>Category</th><th>Company target</th><th>Companies</th><th>Drives</th><th>Placed</th><th>Joined</th></tr></thead><tbody>{targets.map((target) => <tr key={target.id}><td>{data.seasons?.find((item) => String(item.id) === String(target.season_id))?.name || "Season"}</td><td>{users.find((item) => String(item.id) === String(target.user_id))?.full_name || "Placement manager"}</td><td>{data.categories?.find((item) => String(item.id) === String(target.category_id))?.name || "Category"}</td><td><b>{target.companies_target || 0}</b></td><td>{valueFor(target, "companies_acquired")}</td><td>{valueFor(target, "drives_conducted")}</td><td>{valueFor(target, "students_placed")}</td><td>{valueFor(target, "students_joined")}</td></tr>)}</tbody></table>{!targets.length && <div className="empty-state"><p className="muted">No targets have been declared for your team yet.</p></div>}</div>;
+}
+
+function PlacementAnalytics({ analytics, data = {}, role }) {
+  const [seasonFilter, setSeasonFilter] = useState(() => localStorage.getItem("placement-season-filter") || "");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [outlookFilter, setOutlookFilter] = useState("");
+  const [managerFilter, setManagerFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const totals = analytics?.totals || {};
+  const targetTotals = analytics?.target_totals || {};
+  const summary = analytics?.summary || {};
+  const rows = analytics?.rows || [];
+  const statusCounts = analytics?.status_counts || {};
+  const outlookCounts = analytics?.outlook_counts || {};
+  const driveStatusCounts = analytics?.drive_status_counts || {};
+  const managers = analytics?.by_manager || [];
+  const cards = [
+    ["Companies acquired", totals.companies_acquired],
+    ["Drives conducted", totals.drives_conducted],
+    ["Offers received", totals.offers_received],
+    ["Students placed", totals.students_placed],
+    ["Students joined", totals.students_joined],
+    ["Company target", targetTotals.companies_target],
+  ];
+  const filteredRows = rows.filter((row) => {
+    const text = `${row.organization_name || ""} ${row.city || ""} ${row.industry || ""} ${row.placement_manager_name || ""} ${row.category_name || ""}`.toLowerCase();
+    return (!seasonFilter || String(row.season_id) === String(seasonFilter)) && (!statusFilter || row.pipeline_status === statusFilter) && (!outlookFilter || row.outlook === outlookFilter) && (!managerFilter || String(row.placement_manager_id) === String(managerFilter)) && (!search.trim() || text.includes(search.trim().toLowerCase()));
+  });
+  const exportRows = [["Company", "Manager", "Season", "Category", "Pipeline status", "Outlook", "Expected date", "Drive status", "Drive date", "Registered", "Selected", "Placed", "Joined", "Next follow-up", "Next action"], ...filteredRows.map((row) => [row.organization_name, row.placement_manager_name, row.season_name, row.category_name, row.pipeline_status_label, row.outlook_label, row.expected_date, row.drive_status_label, row.drive_date, row.students_registered, row.students_selected, row.students_placed, row.students_joined, row.next_follow_up_date, row.next_action])];
+  const seasonRows = (analytics?.by_season || []).filter((row) => !seasonFilter || String(row.season_id) === String(seasonFilter));
+  const categoryRows = analytics?.by_category || [];
+  const cityRows = analytics?.by_city || [];
+  const progress = targetTotals.companies_target ? Math.min(100, Math.round((Number(totals.companies_acquired || 0) / Number(targetTotals.companies_target)) * 100)) : 0;
+  const labelFor = (options, value) => options.find(([key]) => key === value)?.[1] || value;
+  const statusClass = (value) => String(value || "").replaceAll("_", "-");
+  return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">{role === "data_analyst" ? "ANALYTICS WORKSPACE" : "PLACEMENT INTELLIGENCE"}</p><h2>Placement analytics</h2><p className="muted">A live university-wide view of targets, company pipeline, drives, outcomes, and follow-up health.</p></div><div className="actions"><select className="filter" value={seasonFilter} onChange={(e) => { setSeasonFilter(e.target.value); localStorage.setItem("placement-season-filter", e.target.value); }} aria-label="Filter by placement season"><option value="">All seasons</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="btn secondary" onClick={() => downloadCsv("vextra-placement-tracking.csv", exportRows)}><Download size={14} />Export grid</button><button className="btn secondary" onClick={() => window.print()}>Print / PDF</button></div></div><div className="report-stats analytics-stat-grid">{cards.map(([label, value]) => <div className="stat" key={label}><span>{label}</span><strong>{value || 0}</strong><small>{label === "Company target" ? `${progress}% acquired` : "Across current view"}</small></div>)}<div className="stat"><span>Active pipeline</span><strong>{summary.active_pipeline || 0}</strong><small>{summary.companies_in_pipeline || 0} total, excluding cancelled</small></div><div className="stat"><span>Overdue follow-ups</span><strong className={summary.overdue_followups ? "danger-number" : ""}>{summary.overdue_followups || 0}</strong><small>{summary.expected_next_30_days || 0} expected in 30 days</small></div></div><div className="analytics-overview-grid"><div className="panel analytics-distribution"><div className="panel-head"><div><p className="eyebrow">PIPELINE HEALTH</p><h3>Companies by stage</h3><span className="muted">Where every tracked company sits today.</span></div></div>{placementPipelineStatuses.map(([key, label]) => { const count = Number(statusCounts[key] || 0); const max = Math.max(1, ...Object.values(statusCounts).map(Number)); return <div className="distribution-row" key={key}><span>{label}</span><div className="distribution-bar"><i style={{ width: `${Math.round((count / max) * 100)}%` }} /></div><b>{count}</b></div>; })}</div><div className="panel analytics-signals"><div className="panel-head"><div><p className="eyebrow">SIGNALS</p><h3>Positive and negative outlook</h3><span className="muted">Coordinator-entered confidence indicators.</span></div></div>{placementOutlooks.map(([key, label]) => <div className={`signal-row ${key}`} key={key}><span>{label}</span><b>{outlookCounts[key] || 0}</b></div>)}<div className="signal-divider" /><p className="eyebrow">DRIVE READINESS</p>{placementDriveStatuses.map(([key, label]) => <div className="signal-row compact" key={key}><span>{label}</span><b>{driveStatusCounts[key] || 0}</b></div>)}</div></div><div className="panel target-health"><div><p className="eyebrow">TARGET DELIVERY</p><h3>Company acquisition against admin target</h3><p className="muted">{totals.companies_acquired || 0} acquired of {targetTotals.companies_target || 0} companies declared by the University Admin.</p></div><div className="target-health-value"><strong>{progress}%</strong><div className="target-health-bar"><i style={{ width: `${progress}%` }} /></div></div></div><div className="panel table-panel analytics-grid-panel"><div className="panel-head"><div><p className="eyebrow">PLACEMENT TRACKING GRID</p><h3>Company pipeline detail</h3><span className="muted">Read-only operational view for university admins and data analysts. Coordinators see only the identities permitted by their access policy.</span></div><span className="count">{filteredRows.length} of {rows.length}</span></div><div className="analytics-filter-bar"><div className="search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company, manager, category, city…" aria-label="Search placement tracking grid" /></div><select className="filter" value={managerFilter} onChange={(e) => setManagerFilter(e.target.value)} aria-label="Filter by placement manager"><option value="">All managers</option>{managers.map((item) => <option key={item.placement_manager_id} value={item.placement_manager_id}>{item.placement_manager_name}</option>)}</select><select className="filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by pipeline status"><option value="">All pipeline stages</option>{placementPipelineStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><select className="filter" value={outlookFilter} onChange={(e) => setOutlookFilter(e.target.value)} aria-label="Filter by outlook"><option value="">All outlooks</option>{placementOutlooks.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div><div className="analytics-grid-scroll" role="region" aria-label="Placement tracking grid" tabIndex="0"><table className="analytics-grid-table"><thead><tr><th>Company</th><th>Owner</th><th>Season</th><th>Category</th><th>Pipeline stage</th><th>Outlook</th><th>Probability</th><th>Expected date</th><th>Drive</th><th>Drive date</th><th>Registered</th><th>Selected</th><th>Offers</th><th>Placed</th><th>Joined</th><th>Follow-up</th><th>Next action</th><th>Updated</th></tr></thead><tbody>{filteredRows.map((row) => <tr key={row.id} className={row.outlook === "negative" || row.pipeline_status === "cancelled" ? "analytics-row-negative" : ""}><td><b>{row.organization_name || "Organization"}</b><small>{row.city || row.industry || "—"}</small></td><td>{row.placement_manager_name || "Placement manager"}</td><td>{row.season_name || "Season"}</td><td>{row.category_name || "Uncategorized"}</td><td><span className={`pipeline-status ${statusClass(row.pipeline_status)}`}>{row.pipeline_status_label || labelFor(placementPipelineStatuses, row.pipeline_status)}</span></td><td><span className={`outlook-pill ${row.outlook || "neutral"}`}>{row.outlook_label || labelFor(placementOutlooks, row.outlook)}</span></td><td>{row.company_probability || 0}%</td><td className={row.expected_date && row.expected_date < new Date().toISOString().slice(0, 10) && !["joined", "cancelled"].includes(row.pipeline_status) ? "danger-number" : ""}>{row.expected_date || "—"}</td><td><span className={`drive-pill ${statusClass(row.drive_status)}`}>{row.drive_status_label || labelFor(placementDriveStatuses, row.drive_status)}</span></td><td>{row.drive_date || "—"}</td><td>{row.students_registered || 0}</td><td>{row.students_selected || 0}</td><td>{row.offers_received || 0}</td><td>{row.students_placed || 0}</td><td>{row.students_joined || 0}</td><td className={row.next_follow_up_date && row.next_follow_up_date < new Date().toISOString().slice(0, 10) && row.pipeline_status !== "cancelled" ? "danger-number" : ""}>{row.next_follow_up_date || "—"}</td><td>{row.next_action || row.notes || "—"}</td><td>{row.updated_at ? new Date(row.updated_at).toLocaleDateString() : "—"}</td></tr>)}</tbody></table>{!filteredRows.length && <div className="empty-state"><h3>No companies match this view</h3><p className="muted">Add or update placement tracking from Placement Updates.</p></div>}</div></div><div className="analytics-support-grid"><div className="panel table-panel"><div className="panel-head"><div><h3>Season comparison</h3><span className="muted">Cross-season placement outcomes</span></div></div><table><thead><tr><th>Season</th><th>Companies</th><th>Drives</th><th>Offers</th><th>Placed</th></tr></thead><tbody>{seasonRows.map((row) => <tr key={row.season_id}><td>{row.season_name}</td><td>{row.companies_acquired}</td><td>{row.drives_conducted}</td><td>{row.offers_received}</td><td>{row.students_placed}</td></tr>)}</tbody></table>{!seasonRows.length && <div className="empty-state"><p className="muted">No season comparison data yet.</p></div>}</div><div className="panel table-panel"><div className="panel-head"><div><h3>Category trends</h3><span className="muted">Company category performance</span></div></div><table><thead><tr><th>Category</th><th>Companies</th><th>Offers</th><th>Placed</th></tr></thead><tbody>{categoryRows.map((row) => <tr key={row.category_id || "uncategorized"}><td>{row.category_name}</td><td>{row.companies_acquired}</td><td>{row.offers_received}</td><td>{row.students_placed}</td></tr>)}</tbody></table>{!categoryRows.length && <div className="empty-state"><p className="muted">No category trend data yet.</p></div>}</div><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CITY TRENDS</p><h3>Placement by city</h3></div></div><table><thead><tr><th>City</th><th>Companies</th><th>Drives</th><th>Placed</th></tr></thead><tbody>{cityRows.map((row) => <tr key={row.city}><td>{row.city}</td><td>{row.companies_acquired}</td><td>{row.drives_conducted}</td><td>{row.students_placed}</td></tr>)}</tbody></table>{!cityRows.length && <div className="empty-state"><p className="muted">No city trend data yet.</p></div>}</div><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">MANAGER COMPARISON</p><h3>Performance by placement manager</h3></div></div><table><thead><tr><th>Placement manager</th><th>Companies</th><th>Drives</th><th>Offers</th><th>Placed</th><th>Joined</th></tr></thead><tbody>{managers.map((row) => <tr key={row.placement_manager_id}><td><b>{row.placement_manager_name}</b></td><td>{row.companies_acquired || 0}</td><td>{row.drives_conducted || 0}</td><td>{row.offers_received || 0}</td><td>{row.students_placed || 0}</td><td>{row.students_joined || 0}</td></tr>)}</tbody></table>{!managers.length && <div className="empty-state"><p className="muted">No placement metrics yet.</p></div>}</div></div></div>;
+}
+
+function SeasonPeopleStep({ data, users, seasonId, setSeasonId, assignments, teamMembers, onRefresh, onError, onSuccess, onNext }) {
+  const [selectedPeople, setSelectedPeople] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
+  const assignedIds = new Set(assignments.map((item) => String(item.user_id)));
+  const available = teamMembers.filter((item) => !assignedIds.has(String(item.id)));
+  const allSelected = available.length > 0 && selectedPeople.length === available.length;
+  const toggleAll = () => setSelectedPeople(allSelected ? [] : available.map((item) => item.id));
+  const assign = async (event) => { event.preventDefault(); if (!seasonId || !selectedPeople.length) return; setBusy(true); try { await apiFetch("/api/placement/assignments/bulk", { method: "POST", body: JSON.stringify({ season_id: seasonId, user_ids: selectedPeople }) }); await onRefresh(); onSuccess(`${selectedPeople.length} user${selectedPeople.length === 1 ? "" : "s"} added to this season.`); setSelectedPeople([]); } catch (error) { onError(error.message); } finally { setBusy(false); } };
+  const remove = async (assignment) => { setRemovingId(assignment.id); try { await apiFetch(`/api/placement/assignments/${assignment.id}`, { method: "DELETE" }); await onRefresh(); setSelectedPeople((current) => current.filter((id) => String(id) !== String(assignment.user_id))); onSuccess("User removed from this season. Their account is unchanged."); } catch (error) { onError(error.message); } finally { setRemovingId(null); } };
+  return <div className="setup-grid"><div className="panel form-card"><p className="eyebrow">STEP 2 OF 6</p><h3>Add people to this season</h3><p className="muted">Select one or more coordinators and placement managers. People already assigned to this cycle are hidden.</p><Select label="Season" name="season_id" value={seasonId} onChange={(event) => { setSeasonId(event.target.value); setSelectedPeople([]); }}><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.academic_year}</option>)}</Select><form onSubmit={assign}><div className="select-all-row"><label><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!available.length || busy || removingId} /> Select all available</label><span>{selectedPeople.length} selected</span></div><div className="people-picker">{available.map((item) => <label className="people-picker-row" key={item.id}><input type="checkbox" checked={selectedPeople.includes(item.id)} onChange={(event) => setSelectedPeople((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span><b>{item.full_name}</b><small>{item.role.replaceAll("_", " ")} · {item.email}</small></span></label>)}{!available.length && <p className="muted">All available users are already assigned to this season.</p>}</div><button className="btn primary" disabled={busy || removingId || !seasonId || !selectedPeople.length}>{busy ? "Adding users…" : "Add selected users"}</button></form><button type="button" className="btn secondary setup-next" onClick={onNext} disabled={!seasonId || busy || removingId}>Continue to categories</button></div><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">ASSIGNED PEOPLE</p><h3>{data.seasons?.find((item) => String(item.id) === String(seasonId))?.name || "Select a season"}</h3><span className="muted">Removing here only removes the season assignment.</span></div></div><table><thead><tr><th>Person</th><th>Role</th><th>Action</th></tr></thead><tbody>{assignments.map((item) => { const person = users.find((user) => String(user.id) === String(item.user_id)); return <tr key={item.id}><td>{person?.full_name || "Team member"}</td><td>{person?.role?.replaceAll("_", " ") || "—"}</td><td><button type="button" className="text-btn danger" onClick={() => remove(item)} disabled={Boolean(removingId)}>{removingId === item.id ? "Removing…" : "Remove"}</button></td></tr>; })}</tbody></table>{!assignments.length && <div className="empty-state"><p className="muted">No people assigned yet.</p></div>}</div></div>;
+}
+
+function CitySelectionStep({ data, onRefresh, onError, onSuccess, onNext }) {
+  const [selectedCities, setSelectedCities] = useState([]);
+  const [customCity, setCustomCity] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [cityMenuOpen, setCityMenuOpen] = useState(false);
+  const [citySearch, setCitySearch] = useState("");
+  const existingCities = data.cities || [];
+  const existingNames = new Set(existingCities.map((item) => String(item.city).trim().toLowerCase()));
+  const options = [...new Map([...commonPlacementCities, ...existingCities.map((item) => item.city)].map((city) => [city.trim().toLowerCase(), city.trim()])).values()];
+  const filteredOptions = options.filter((city) => city.toLowerCase().includes(citySearch.trim().toLowerCase()));
+  const toggleCity = (city) => setSelectedCities((current) => current.some((item) => item.toLowerCase() === city.toLowerCase()) ? current.filter((item) => item.toLowerCase() !== city.toLowerCase()) : [...current, city]);
+  const addCustomCity = () => {
+    const value = customCity.trim();
+    if (!value || existingNames.has(value.toLowerCase())) { setCustomCity(""); return; }
+    setSelectedCities((current) => current.some((city) => city.toLowerCase() === value.toLowerCase()) ? current : [...current, value]);
+    setCustomCity("");
+  };
+  const saveCities = async (event) => {
+    event.preventDefault();
+    if (!selectedCities.length) { onError("Choose at least one new city or enter a custom city."); return; }
+    setBusy(true);
+    try { await apiFetch("/api/placement/cities/bulk", { method: "POST", body: JSON.stringify({ cities: selectedCities }) }); await onRefresh(); onSuccess(`${selectedCities.length} ${selectedCities.length === 1 ? "city" : "cities"} added to your university list.`); setSelectedCities([]); } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  return <div className="setup-grid"><form className="panel form-card" onSubmit={saveCities}><p className="eyebrow">STEP 4 OF 6</p><h3>Configure allowed cities</h3><p className="muted">Choose multiple common cities with simple clicks. Add a custom city when it is not in the list.</p><div className="city-picker-field"><span>Common cities</span><div className="city-multi-picker"><button type="button" className="city-picker-toggle" onClick={() => setCityMenuOpen((open) => !open)} aria-expanded={cityMenuOpen}>{selectedCities.length ? `${selectedCities.length} cities selected` : "Choose cities"}<span>⌄</span></button>{cityMenuOpen && <div className="city-picker-menu"><input className="city-picker-search" value={citySearch} onChange={(event) => setCitySearch(event.target.value)} placeholder="Search cities" autoFocus /><div className="city-picker-options">{filteredOptions.map((city) => { const alreadyAllowed = existingNames.has(city.toLowerCase()); return <label className={`city-option ${alreadyAllowed ? "already-allowed" : ""}`} key={city}><input type="checkbox" checked={selectedCities.some((item) => item.toLowerCase() === city.toLowerCase())} onChange={() => toggleCity(city)} disabled={alreadyAllowed} /><span>{city}</span>{alreadyAllowed && <small>Already allowed</small>}</label>; })}{!filteredOptions.length && <p className="muted city-picker-empty">No matching cities.</p>}</div></div>}</div></div><div className="custom-city-row"><label className="field"><span>Custom city</span><input value={customCity} onChange={(event) => setCustomCity(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCustomCity(); } }} placeholder="e.g. Tirupati" /></label><button type="button" className="btn secondary" onClick={addCustomCity} disabled={!customCity.trim() || busy}>Add city</button></div><div className="selected-city-summary"><b>{selectedCities.length} new {selectedCities.length === 1 ? "city" : "cities"} selected</b>{selectedCities.length > 0 && <div className="city-chips">{selectedCities.map((city) => <button type="button" key={city} onClick={() => setSelectedCities((current) => current.filter((item) => item !== city))}>{city} ×</button>)}</div>}</div><button className="btn primary" disabled={busy || !selectedCities.length}>{busy ? "Saving cities…" : "Save selected cities"}</button><button type="button" className="btn secondary setup-next" onClick={onNext} disabled={busy}>Continue to targets</button></form><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">ALLOWED LOCATIONS</p><h3>Company city options</h3><span className="muted">These options are available when companies are added.</span></div></div><div className="allowed-city-list">{existingCities.map((item) => <span className="city-chip" key={item.id}>{item.city}</span>)}</div>{!existingCities.length && <div className="empty-state"><p className="muted">No cities added yet.</p></div>}</div></div>;
+}
+
+function PlacementSetupWizard({ data, users, onRefresh, onError, onSuccess }) {
+  const [step, setStep] = useState(1);
+  const [seasonId, setSeasonId] = useState(data.seasons?.[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!seasonId && data.seasons?.[0]?.id) setSeasonId(data.seasons[0].id); }, [data.seasons, seasonId]);
+  const run = async (event, path, payload, nextStep) => {
+    const form = event.currentTarget;
+    event.preventDefault(); setBusy(true);
+    try { const result = await apiFetch(path, { method: "POST", body: JSON.stringify(payload) }); await onRefresh(); onSuccess("Saved successfully."); if (result?.id && path.endsWith("/seasons")) setSeasonId(result.id); if (nextStep) setStep(nextStep); form.reset(); } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  const currentSeason = data.seasons?.find((item) => String(item.id) === String(seasonId));
+  const assignments = (data.assignments || []).filter((item) => String(item.season_id) === String(seasonId));
+  const teamMembers = (users || []).filter((item) => ["coordinator", "placement_manager"].includes(item.role));
+  const coordinators = (users || []).filter((item) => item.role === "coordinator");
+  const steps = [[1, "Season", "Create the placement cycle"], [2, "People", "Add users to the cycle"], [3, "Categories", "Define your CTC bands"], [4, "Cities", "Choose allowed locations"], [5, "Targets", "Set team goals"], [6, "Access", "Control visibility"]];
+  return <div className="setup-wizard"><div className="section-heading"><div><p className="eyebrow">UNIVERSITY ADMIN SETUP</p><h2>Configure placements step by step</h2><p className="muted">Complete each step in order. Your university controls its own seasons, categories, cities, targets, and access.</p></div></div><div className="setup-steps">{steps.map(([number, label, hint]) => <button type="button" key={number} className={`setup-step ${step === number ? "active" : ""} ${step > number ? "complete" : ""}`} onClick={() => setStep(number)}><span>{step > number ? "✓" : number}</span><b>{label}</b><small>{hint}</small></button>)}</div><div className="setup-step-content">
+    {step === 1 && <form className="panel form-card" onSubmit={(event) => run(event, "/api/placement/seasons", { name: new FormData(event.currentTarget).get("name"), academic_year: new FormData(event.currentTarget).get("academic_year"), start_date: new FormData(event.currentTarget).get("start_date"), end_date: new FormData(event.currentTarget).get("end_date"), status: new FormData(event.currentTarget).get("status") }, 2)}><p className="eyebrow">STEP 1 OF 6</p><h3>Create a placement season</h3><p className="muted">A season is an independent placement cycle. Multiple seasons can be active at the same time.</p><Field label="Season name" name="name" placeholder="Campus placements" /><div className="form-grid"><Field label="Academic year" name="academic_year" placeholder="2026–2027" /><Select label="Status" name="status" defaultValue="active"><option value="active">Active</option><option value="completed">Completed</option></Select></div><div className="form-grid"><Field label="Start date" name="start_date" type="date" /><Field label="End date" name="end_date" type="date" /></div><button className="btn primary" disabled={busy}>Create season and continue</button></form>}
+    {step === 2 && <SeasonPeopleStep data={data} users={users} seasonId={seasonId} setSeasonId={setSeasonId} assignments={assignments} teamMembers={teamMembers} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} onNext={() => setStep(3)} />}
+    {step === 3 && <div className="setup-grid"><form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return run(event, "/api/placement/categories", { name: form.get("name"), min_ctc_lpa: form.get("min_ctc_lpa") ? Number(form.get("min_ctc_lpa")) : null, max_ctc_lpa: form.get("max_ctc_lpa") ? Number(form.get("max_ctc_lpa")) : null, description: form.get("description") }); }}><p className="eyebrow">STEP 3 OF 6</p><h3>Define company categories</h3><p className="muted">There are no platform defaults. Create the category names and CTC ranges used by your university.</p><Field label="Category name" name="name" placeholder="e.g. Dream, Super Dream, Core" /><div className="form-grid"><Field label="Minimum CTC (LPA)" name="min_ctc_lpa" type="number" step="0.01" /><Field label="Maximum CTC (LPA)" name="max_ctc_lpa" type="number" step="0.01" /></div><Field label="What does this category mean?" name="description" placeholder="Optional explanation for your team" required={false} /><button className="btn primary" disabled={busy}>Add university category</button><button type="button" className="btn secondary setup-next" onClick={() => setStep(4)}>Continue to cities</button></form><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">YOUR CATEGORIES</p><h3>Visible to coordinators and placement managers</h3></div></div><table><thead><tr><th>Category</th><th>CTC range</th></tr></thead><tbody>{(data.categories || []).map((item) => <tr key={item.id}><td><b>{item.name}</b><small>{item.description || "University-defined category"}</small></td><td>{item.min_ctc_lpa ?? 0}–{item.max_ctc_lpa ?? "No upper limit"} LPA</td></tr>)}</tbody></table>{!data.categories?.length && <div className="empty-state"><p className="muted">Add your first category.</p></div>}</div></div>}
+    {step === 4 && <CitySelectionStep data={data} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} onNext={() => setStep(5)} />}
+    {step === 5 && <div className="setup-grid"><form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return run(event, "/api/placement/targets", { season_id: form.get("season_id"), user_id: form.get("user_id"), category_id: form.get("category_id"), companies_target: Number(form.get("companies_target") || 0) }); }}><p className="eyebrow">STEP 5 OF 6</p><h3>Declare manager targets</h3><p className="muted">Set one measurable company target for each placement manager and category. Coordinators and managers record drives and student outcomes later.</p><Select label="Season" name="season_id" defaultValue={seasonId}><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select label="Placement manager" name="user_id" required><option value="">Choose placement manager</option>{teamMembers.filter((item) => item.role === "placement_manager").map((item) => <option key={item.id} value={item.id}>{item.full_name} · placement manager</option>)}</Select><Select label="Company category" name="category_id" required><option value="">Choose category</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Field label="Company target" name="companies_target" type="number" min="0" defaultValue="0" /><small className="form-help">How many companies should this manager bring into this category for the selected season?</small><button className="btn primary" disabled={busy}>Save manager target</button><button type="button" className="btn secondary setup-next" onClick={() => setStep(6)}>Continue to access</button></form><div className="panel table-panel target-setup-table"><div className="panel-head"><div><p className="eyebrow">TARGETS SAVED</p><h3>Manager targets by category</h3><span className="muted">Declared by University Admin</span></div></div><table><thead><tr><th>Season</th><th>Manager</th><th>Category</th><th>Company target</th></tr></thead><tbody>{(data.targets || []).map((item) => <tr key={item.id}><td>{data.seasons?.find((season) => String(season.id) === String(item.season_id))?.name || "Season"}</td><td>{users.find((person) => String(person.id) === String(item.user_id))?.full_name || "Team member"}</td><td>{data.categories?.find((category) => String(category.id) === String(item.category_id))?.name || "Category"}</td><td><b>{item.companies_target || 0}</b></td></tr>)}</tbody></table>{!data.targets?.length && <div className="empty-state"><p className="muted">No manager targets saved yet.</p></div>}</div></div>}
+    {step === 6 && <div className="setup-access-step"><div className="panel setup-access-intro"><p className="eyebrow">STEP 6 OF 6</p><h3>Set team access</h3><p className="muted">Choose exactly what each coordinator can see. Without a grant, company and contact details stay masked.</p><span className="access-flow-hint">Select coordinator → choose access level → select areas → save policy</span></div><AccessGrantPanel users={users} grants={data.access} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /><div className="panel setup-complete"><span className="setup-complete-icon">✓</span><div><h3>Placement setup is ready</h3><p className="muted">You can return to any step at any time to update your university configuration.</p></div><button type="button" className="btn secondary" onClick={() => setStep(1)}>Review from the beginning</button></div></div>}
+  </div></div>;
+}
+
+function PlacementSetup({ data, users, onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const submit = async (path, payload) => {
+    setBusy(true);
+    try { await apiFetch(path, { method: "POST", body: JSON.stringify(payload) }); await onRefresh(); onSuccess("Placement setup saved."); } catch (e) { onError(e.message); } finally { setBusy(false); }
+  };
+  return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">UNIVERSITY CONFIGURATION</p><h2>Placement setup</h2><p className="muted">Manage independent seasons, salary categories, targets, access, and allowed cities.</p></div></div><div className="two-column"><form className="panel form-card" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); submit("/api/placement/seasons", { name: f.get("name"), academic_year: f.get("academic_year"), start_date: f.get("start_date"), end_date: f.get("end_date"), status: f.get("status") }); }}><h3>New placement season</h3><Field label="Season name" name="name" placeholder="Campus placements" /><Field label="Academic year" name="academic_year" placeholder="2026-2027" /><div className="form-grid"><Field label="Start date" name="start_date" type="date" /><Field label="End date" name="end_date" type="date" /></div><Select label="Status" name="status" defaultValue="active"><option value="active">Active</option><option value="completed">Completed</option></Select><button className="btn primary" disabled={busy}>Create season</button></form><form className="panel form-card" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); submit("/api/placement/categories", { name: f.get("name"), min_ctc_lpa: f.get("min_ctc_lpa") ? Number(f.get("min_ctc_lpa")) : null, max_ctc_lpa: f.get("max_ctc_lpa") ? Number(f.get("max_ctc_lpa")) : null, description: f.get("description") }); }}><h3>New company category</h3><Field label="Category name" name="name" placeholder="Dream" /><div className="form-grid"><Field label="Minimum CTC (LPA)" name="min_ctc_lpa" type="number" step="0.01" /><Field label="Maximum CTC (LPA)" name="max_ctc_lpa" type="number" step="0.01" /></div><Field label="Description" name="description" placeholder="Companies in this category" /><button className="btn primary" disabled={busy}>Create category</button></form><form className="panel form-card" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); submit("/api/placement/cities", { city: f.get("city") }); }}><h3>Add allowed city</h3><Field label="City" name="city" placeholder="Bengaluru" /><button className="btn primary" disabled={busy}>Add city</button></form><form className="panel form-card" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); submit("/api/placement/targets", { season_id: f.get("season_id"), user_id: f.get("user_id"), category_id: f.get("category_id") || null, companies_target: Number(f.get("companies_target") || 0), drives_target: Number(f.get("drives_target") || 0), offers_target: Number(f.get("offers_target") || 0), students_placed_target: Number(f.get("students_placed_target") || 0), students_joined_target: Number(f.get("students_joined_target") || 0) }); }}><h3>Set placement target</h3><Select label="Season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select><Select label="Team member" name="user_id"><option value="">Choose member</option>{(users || []).filter((u) => ["coordinator", "placement_manager"].includes(u.role)).map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}</Select><Select label="Category" name="category_id"><option value="">All categories</option>{(data.categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select><div className="form-grid">{[["companies_target", "Companies"], ["drives_target", "Drives"], ["offers_target", "Offers"], ["students_placed_target", "Placed students"], ["students_joined_target", "Joined students"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue="0" />)}</div><button className="btn primary" disabled={busy}>Save target</button></form></div><div className="panel table-panel"><h3>Configured seasons</h3><table><thead><tr><th>Name</th><th>Academic year</th><th>Dates</th><th>Status</th></tr></thead><tbody>{(data.seasons || []).map((s) => <tr key={s.id}><td>{s.name}</td><td>{s.academic_year}</td><td>{s.start_date} – {s.end_date}</td><td><span className={`badge ${s.status}`}>{s.status}</span></td></tr>)}</tbody></table></div></div>;
+}
+
+function SeasonAssignmentPanel({ seasons = [], assignments = [], users = [], onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const assign = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      await apiFetch("/api/placement/assignments", { method: "POST", body: JSON.stringify({ season_id: form.get("season_id"), user_id: form.get("user_id") }) });
+      await onRefresh();
+      onSuccess("Placement season assigned.");
+      event.currentTarget.reset();
+    } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  const names = new Map(users.map((item) => [String(item.id), item.full_name]));
+  const seasonNames = new Map(seasons.map((item) => [String(item.id), `${item.name} · ${item.academic_year}`]));
+  return <div className="two-column"><form className="panel form-card" onSubmit={assign}><h3>Assign placement season</h3><p className="muted form-help">Choose who owns each season’s placement work. A person can be assigned to multiple seasons.</p><Select label="Placement season" name="season_id"><option value="">Choose season</option>{seasons.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.academic_year}</option>)}</Select><Select label="Coordinator or placement manager" name="user_id"><option value="">Choose team member</option>{users.filter((item) => ["coordinator", "placement_manager"].includes(item.role)).map((item) => <option key={item.id} value={item.id}>{item.full_name} · {item.role.replaceAll("_", " ")}</option>)}</Select><button className="btn primary" disabled={busy}>Assign season</button></form><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CURRENT ASSIGNMENTS</p><h3>Season ownership</h3></div></div><table><thead><tr><th>Season</th><th>Assigned member</th></tr></thead><tbody>{assignments.map((item) => <tr key={item.id}><td>{seasonNames.get(String(item.season_id)) || "Season"}</td><td>{names.get(String(item.user_id)) || "Team member"}</td></tr>)}</tbody></table>{!assignments.length && <div className="empty-state"><p className="muted">No season assignments yet.</p></div>}</div></div>;
+}
+
+function TargetPermissionPanel({ enabled, onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const save = async (event) => { const value = event.target.checked; setBusy(true); try { await apiFetch("/api/placement/settings", { method: "PATCH", body: JSON.stringify({ coordinator_target_entry_enabled: value }) }); await onRefresh(); onSuccess(value ? "Coordinator target entry enabled." : "Coordinator target entry disabled."); } catch (error) { event.target.checked = !value; onError(error.message); } finally { setBusy(false); } };
+  return <div className="panel settings"><div className="setting-row"><div><b>Allow coordinators to enter targets</b><small>When enabled, coordinators can set targets for their reporting scope. University Admin approval remains in control.</small></div><label className="switch"><input type="checkbox" checked={Boolean(enabled)} onChange={save} disabled={busy} /><span /></label></div></div>;
+}
+
+function TargetEntryPanel({ data, users, onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const save = async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); try { await apiFetch("/api/placement/targets", { method: "POST", body: JSON.stringify({ season_id: form.get("season_id"), user_id: form.get("user_id"), category_id: form.get("category_id") || null, companies_target: Number(form.get("companies_target") || 0), drives_target: Number(form.get("drives_target") || 0), offers_target: Number(form.get("offers_target") || 0), students_placed_target: Number(form.get("students_placed_target") || 0), students_joined_target: Number(form.get("students_joined_target") || 0) }) }); await onRefresh(); onSuccess("Target saved."); event.currentTarget.reset(); } catch (error) { onError(error.message); } finally { setBusy(false); } };
+  return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">COORDINATOR WORKSPACE</p><h2>Set placement targets</h2><p className="muted">Set targets for team members in your reporting scope by season and company category.</p></div></div><form className="panel form-card" onSubmit={save}><div className="form-grid"><Select label="Season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.academic_year}</option>)}</Select><Select label="Team member" name="user_id"><option value="">Choose team member</option>{(users || []).filter((item) => ["coordinator", "placement_manager"].includes(item.role)).map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</Select></div><Select label="Company category" name="category_id"><option value="">All categories</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><div className="form-grid">{[["companies_target", "Companies"], ["drives_target", "Drives"], ["offers_target", "Offers"], ["students_placed_target", "Placed students"], ["students_joined_target", "Joined students"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue="0" />)}</div><button className="btn primary" disabled={busy}>Save target</button></form></div>;
+}
+
+function DuplicateApprovals({ requests, onRefresh, onError, onSuccess }) {
+  const review = async (id, status) => { try { await apiFetch(`/api/placement/duplicate-requests/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await onRefresh(); onSuccess(`Request ${status}.`); } catch (e) { onError(e.message); } };
+  return <div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CONTROLLED COLLABORATION</p><h2>Duplicate company approvals</h2><p className="muted">Only a University Admin can approve a second company record.</p></div></div><table><thead><tr><th>Requested company</th><th>Requested by</th><th>Status</th><th>Actions</th></tr></thead><tbody>{(requests || []).map((request) => <tr key={request.id}><td><b>{request.requested_name}</b></td><td>{request.requested_by}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <><button className="text-btn" onClick={() => review(request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review(request.id, "rejected")}>Reject</button></>}</td></tr>)}</tbody></table>{!requests?.length && <div className="empty-state"><h3>No approval requests</h3><p className="muted">Duplicate company requests will appear here.</p></div>}</div>;
+}
+
+function AccessGrantPanel({ users, grants = [], onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const coordinators = (users || []).filter((u) => u.role === "coordinator");
+  const areas = [["organizations", "Organizations", "Company names, owners, cities, and pipeline status"], ["contacts", "Contacts", "Contact names, email, phone, and relationship details"], ["meeting_reports", "Meeting reports", "Meeting outcomes, notes, and follow-up actions"]];
+  const [selectedUser, setSelectedUser] = useState("");
+  const [accessLevel, setAccessLevel] = useState("full");
+  const [permissions, setPermissions] = useState(() => Object.fromEntries(areas.map(([key]) => [key, true])));
+  useEffect(() => {
+    const grant = grants.find((item) => String(item.granted_to) === String(selectedUser));
+    if (!grant) { setAccessLevel("full"); setPermissions(Object.fromEntries(areas.map(([key]) => [key, true]))); return; }
+    setAccessLevel(grant.access_level || "full");
+    setPermissions(
+      Object.fromEntries(
+        areas.map(([key]) => [key, grant.access_level === "full" ? true : Boolean(grant.permissions?.[key])]),
+      ),
+    );
+  }, [selectedUser, grants]);
+  const selectUser = (event) => setSelectedUser(event.target.value);
+  const save = async (event) => {
+    event.preventDefault();
+    if (!selectedUser) { onError("Choose a coordinator first."); return; }
+    if (accessLevel === "partial" && !Object.values(permissions).some(Boolean)) { onError("Select at least one area for partial access."); return; }
+    setBusy(true);
+    try { await apiFetch("/api/placement/access", { method: "POST", body: JSON.stringify({ user_id: selectedUser, access_level: accessLevel, permissions }) }); await onRefresh(); onSuccess(`${accessLevel === "full" ? "Full" : "Partial"} access policy saved.`); } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  const grantLabel = (item) => item.access_level === "partial" ? areas.filter(([key]) => item.permissions?.[key]).map(([, label]) => label).join(", ") || "No areas selected" : "All CRM areas";
+  return <div className="access-policy-layout"><form className="panel form-card access-policy-form" onSubmit={save}><div className="panel-head"><div><p className="eyebrow">ACCESS POLICY</p><h3>Choose what this coordinator can see</h3><span className="muted">Access changes are controlled by the University Admin.</span></div></div><Select label="Coordinator" name="user_id" value={selectedUser} onChange={selectUser}><option value="">Choose coordinator</option>{coordinators.map((u) => <option key={u.id} value={u.id}>{u.full_name} · {u.email}</option>)}</Select><div className="access-level-options"><label className={`access-level-option ${accessLevel === "full" ? "selected" : ""}`}><input type="radio" name="access_level" value="full" checked={accessLevel === "full"} onChange={() => setAccessLevel("full")} /><span><b>Full access</b><small>Reveal all permitted organization, contact, report, and analytics details.</small></span></label><label className={`access-level-option ${accessLevel === "partial" ? "selected" : ""}`}><input type="radio" name="access_level" value="partial" checked={accessLevel === "partial"} onChange={() => setAccessLevel("partial")} /><span><b>Partial access</b><small>Reveal only the areas selected below. Everything else remains masked.</small></span></label></div>{accessLevel === "partial" && <div className="access-area-grid"><p className="form-help">Select one or more areas</p>{areas.map(([key, label, description]) => <label className="access-area-option" key={key}><input type="checkbox" checked={Boolean(permissions[key])} onChange={(event) => setPermissions((current) => ({ ...current, [key]: event.target.checked }))} /><span><b>{label}</b><small>{description}</small></span></label>)}</div>}<div className="access-policy-note">{selectedUser ? <span>{accessLevel === "full" ? "This coordinator will see all CRM details." : `${Object.values(permissions).filter(Boolean).length} of ${areas.length} areas selected.`}</span> : <span>Select a coordinator to create or edit their policy.</span>}</div><button className="btn primary" disabled={busy || !selectedUser}>{busy ? "Saving policy…" : "Save access policy"}</button></form><div className="panel table-panel access-history-panel"><div className="panel-head"><div><p className="eyebrow">CURRENT POLICIES</p><h3>Coordinator access</h3><span className="muted">Select a row to edit its policy.</span></div></div><table><thead><tr><th>Coordinator</th><th>Access</th><th>Areas</th><th>Granted</th><th>Action</th></tr></thead><tbody>{grants.map((item) => <tr key={item.id}><td><b>{coordinators.find((u) => String(u.id) === String(item.granted_to))?.full_name || "Coordinator"}</b></td><td><span className={`badge ${item.access_level === "partial" ? "prospect" : "active"}`}>{item.access_level || "full"}</span></td><td>{grantLabel(item)}</td><td>{item.created_at ? new Date(item.created_at).toLocaleString() : "—"}</td><td><button type="button" className="text-btn" onClick={() => setSelectedUser(item.granted_to)}>Edit</button></td></tr>)}</tbody></table>{!grants.length && <div className="empty-state"><p className="muted">No coordinator access policies configured.</p></div>}</div></div>;
+}
+
+function PlacementEditPanel({ data, users, onRefresh, onError, onSuccess }) {
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (event) => {
+    event.preventDefault();
+    const f = new FormData(event.currentTarget);
+    const type = editing.type;
+    const payload = type === "season"
+      ? { name: f.get("name"), academic_year: f.get("academic_year"), start_date: f.get("start_date"), end_date: f.get("end_date"), status: f.get("status") }
+      : type === "category"
+        ? { name: f.get("name"), min_ctc_lpa: f.get("min_ctc_lpa") ? Number(f.get("min_ctc_lpa")) : null, max_ctc_lpa: f.get("max_ctc_lpa") ? Number(f.get("max_ctc_lpa")) : null, description: f.get("description") }
+        : type === "city" ? { city: f.get("city") } : { season_id: f.get("season_id"), user_id: f.get("user_id"), category_id: f.get("category_id") || null, companies_target: Number(f.get("companies_target") || 0), drives_target: Number(f.get("drives_target") || 0), offers_target: Number(f.get("offers_target") || 0), students_placed_target: Number(f.get("students_placed_target") || 0), students_joined_target: Number(f.get("students_joined_target") || 0) };
+    const path = type === "season" ? `/api/placement/seasons/${editing.item.id}` : type === "category" ? `/api/placement/categories/${editing.item.id}` : type === "city" ? `/api/placement/cities/${editing.item.id}` : "/api/placement/targets";
+    setBusy(true);
+    try { await apiFetch(path, { method: type === "target" ? "POST" : "PATCH", body: JSON.stringify(payload) }); await onRefresh(); onSuccess("Placement configuration updated."); setEditing(null); } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  if (editing) {
+    const item = editing.item;
+    return <form className="panel form-card" onSubmit={save}><div className="panel-head"><h3>Edit {editing.type}</h3><button type="button" className="text-btn" onClick={() => setEditing(null)}>Cancel</button></div>{editing.type === "season" && <><Field label="Season name" name="name" defaultValue={item.name} /><Field label="Academic year" name="academic_year" defaultValue={item.academic_year} /><div className="form-grid"><Field label="Start date" name="start_date" type="date" defaultValue={item.start_date} /><Field label="End date" name="end_date" type="date" defaultValue={item.end_date} /></div><Select label="Status" name="status" defaultValue={item.status}><option value="active">Active</option><option value="completed">Completed</option></Select></>}{editing.type === "category" && <><Field label="Category name" name="name" defaultValue={item.name} /><div className="form-grid"><Field label="Minimum CTC (LPA)" name="min_ctc_lpa" type="number" step="0.01" defaultValue={item.min_ctc_lpa ?? ""} /><Field label="Maximum CTC (LPA)" name="max_ctc_lpa" type="number" step="0.01" defaultValue={item.max_ctc_lpa ?? ""} /></div><Field label="Description" name="description" required={false} defaultValue={item.description || ""} /></>}{editing.type === "city" && <Field label="City" name="city" defaultValue={item.city} />}{editing.type === "target" && <><Select label="Season" name="season_id" defaultValue={item.season_id}>{(data.seasons || []).map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}</Select><Select label="Team member" name="user_id" defaultValue={item.user_id}>{(users || []).filter((u) => ["coordinator", "placement_manager"].includes(u.role)).map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}</Select><Select label="Category" name="category_id" defaultValue={item.category_id || ""}><option value="">All categories</option>{(data.categories || []).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</Select><div className="form-grid">{[["companies_target", "Companies"], ["drives_target", "Drives"], ["offers_target", "Offers"], ["students_placed_target", "Placed students"], ["students_joined_target", "Joined students"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue={item[name] || 0} />)}</div></>}<button className="btn primary" disabled={busy}>Save changes</button></form>;
+  }
+  return <div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CONFIGURATION RECORDS</p><h3>Edit placement setup</h3></div></div><div className="edit-record-grid"><div><b>Seasons</b>{(data.seasons || []).map((item) => <div className="record-row" key={item.id}><span>{item.name}</span><button className="text-btn" onClick={() => setEditing({ type: "season", item })}><Pencil size={13} />Edit</button></div>)}</div><div><b>Categories</b>{(data.categories || []).map((item) => <div className="record-row" key={item.id}><span>{item.name}</span><button className="text-btn" onClick={() => setEditing({ type: "category", item })}><Pencil size={13} />Edit</button></div>)}</div><div><b>Allowed cities</b>{(data.cities || []).map((item) => <div className="record-row" key={item.id}><span>{item.city}</span><button className="text-btn" onClick={() => setEditing({ type: "city", item })}><Pencil size={13} />Edit</button></div>)}</div><div><b>Targets</b>{(data.targets || []).map((item) => <div className="record-row" key={item.id}><span>{item.companies_target} companies · {item.students_placed_target} placed</span><button className="text-btn" onClick={() => setEditing({ type: "target", item })}><Pencil size={13} />Edit</button></div>)}</div></div></div>;
+}
+
+function PlacementMetricFields({ initial = {} }) {
+  return <><div className="form-grid"><Select label="Pipeline status" name="pipeline_status" defaultValue={initial.pipeline_status || "prospect"}>{placementPipelineStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Select label="Outlook" name="outlook" defaultValue={initial.outlook || "neutral"}>{placementOutlooks.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></div><div className="form-grid"><Select label="Drive status" name="drive_status" defaultValue={initial.drive_status || "not_scheduled"}>{placementDriveStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Field label="Company probability (%)" name="company_probability" type="number" min="0" max="100" defaultValue={initial.company_probability ?? 0} /></div><div className="form-grid"><Field label="Expected company date" name="expected_date" type="date" required={false} defaultValue={initial.expected_date || ""} /><Field label="Drive date" name="drive_date" type="date" required={false} defaultValue={initial.drive_date || ""} /></div><div className="form-grid"><Field label="Last contact date" name="last_contact_date" type="date" required={false} defaultValue={initial.last_contact_date || ""} /><Field label="Next follow-up date" name="next_follow_up_date" type="date" required={false} defaultValue={initial.next_follow_up_date || ""} /></div><div className="form-grid metric-number-grid">{[["companies_acquired", "Companies acquired"], ["drives_conducted", "Drives conducted"], ["offers_received", "Offers received"], ["students_registered", "Students registered"], ["students_selected", "Students selected"], ["students_placed", "Students placed"], ["students_joined", "Students joined"], ["students_rejected", "Students rejected"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue={initial[name] ?? 0} />)}</div><Field label="Next action" name="next_action" required={false} defaultValue={initial.next_action || ""} placeholder="e.g. Confirm hiring panel and drive slots" /><Field label="Notes" name="notes" required={false} defaultValue={initial.notes || ""} placeholder="Add context for the placement team" /></>;
+}
+
+function metricPayload(form) {
+  const number = (name) => Number(form.get(name) || 0);
+  const optional = (name) => form.get(name) || null;
+  return { season_id: form.get("season_id"), organization_id: form.get("organization_id"), category_id: optional("category_id"), pipeline_status: form.get("pipeline_status") || "prospect", outlook: form.get("outlook") || "neutral", expected_date: optional("expected_date"), drive_date: optional("drive_date"), last_contact_date: optional("last_contact_date"), next_follow_up_date: optional("next_follow_up_date"), drive_status: form.get("drive_status") || "not_scheduled", company_probability: number("company_probability"), companies_acquired: number("companies_acquired"), drives_conducted: number("drives_conducted"), offers_received: number("offers_received"), students_registered: number("students_registered"), students_selected: number("students_selected"), students_placed: number("students_placed"), students_joined: number("students_joined"), students_rejected: number("students_rejected"), next_action: optional("next_action"), notes: optional("notes") };
+}
+
+function PlacementMetrics({ data, organizations, onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const saveMetric = async (e) => { e.preventDefault(); const form = e.currentTarget; const f = new FormData(form); setBusy(true); try { await apiFetch("/api/placement/metrics", { method: "POST", body: JSON.stringify(metricPayload(f)) }); await onRefresh(); onSuccess("Placement tracking saved."); form.reset(); } catch (e2) { onError(e2.message); } finally { setBusy(false); } };
+  return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">PLACEMENT MANAGER WORKFLOW</p><h2>Placement tracking updates</h2><p className="muted">Record pipeline movement, expected dates, drive readiness, student outcomes, and the next action for each company.</p></div></div><form className="panel form-card" onSubmit={saveMetric}><div className="form-grid"><Select label="Placement season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((s) => <option value={s.id} key={s.id}>{s.name} · {s.academic_year}</option>)}</Select><Select label="Organization" name="organization_id"><option value="">Choose organization</option>{organizations.map((o) => <option value={o.id} key={o.id}>{o.name}</option>)}</Select></div><Select label="Company category" name="category_id"><option value="">Uncategorized</option>{(data.categories || []).map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</Select><PlacementMetricFields /><button className="btn primary" disabled={busy}>Save placement update</button></form><PlacementMetricEditorV2 metrics={data.metrics} seasons={data.seasons} organizations={organizations} categories={data.categories} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /><PlacementAnalytics analytics={data.analytics} data={data} role="placement_manager" /></div>;
+}
+
+function PlacementMetricEditorV2({ metrics, seasons, organizations, categories, onRefresh, onError, onSuccess }) {
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (event) => { event.preventDefault(); const payload = metricPayload(new FormData(event.currentTarget)); setBusy(true); try { await apiFetch("/api/placement/metrics", { method: "POST", body: JSON.stringify(payload) }); await onRefresh(); onSuccess("Placement tracking updated."); setEditing(null); } catch (error) { onError(error.message); } finally { setBusy(false); } };
+  if (!metrics?.length) return null;
+  return <div className="panel table-panel"><div className="panel-head"><h3>Saved placement tracking</h3></div>{editing ? <form className="form-card" onSubmit={save}><div className="form-grid"><Select label="Season" name="season_id" defaultValue={editing.season_id}>{(seasons || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select><Select label="Organization" name="organization_id" defaultValue={editing.organization_id}>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></div><Select label="Category" name="category_id" defaultValue={editing.category_id || ""}><option value="">Uncategorized</option>{(categories || []).map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</Select><PlacementMetricFields initial={editing} /><button className="btn primary" disabled={busy}>Save changes</button><button type="button" className="btn secondary" onClick={() => setEditing(null)}>Cancel</button></form> : <div className="analytics-grid-scroll"><table><thead><tr><th>Organization</th><th>Season</th><th>Pipeline</th><th>Outlook</th><th>Expected date</th><th>Drive</th><th>Placed</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{metrics.map((item) => <tr key={item.id}><td>{organizations.find((o) => String(o.id) === String(item.organization_id))?.name || "Organization"}</td><td>{seasons.find((s) => String(s.id) === String(item.season_id))?.name || "Season"}</td><td>{placementPipelineStatuses.find(([key]) => key === item.pipeline_status)?.[1] || "Prospect"}</td><td>{placementOutlooks.find(([key]) => key === item.outlook)?.[1] || "Neutral"}</td><td>{item.expected_date || "—"}</td><td>{placementDriveStatuses.find(([key]) => key === item.drive_status)?.[1] || "Not scheduled"}</td><td>{item.students_placed || 0}</td><td>{item.students_joined || 0}</td><td><button className="text-btn" onClick={() => setEditing(item)}><Pencil size={13} />Edit</button></td></tr>)}</tbody></table></div>}</div>;
+}
+
+function PlacementMetricEditor({ metrics, seasons, organizations, categories, onRefresh, onError, onSuccess }) {
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (event) => { event.preventDefault(); const f = new FormData(event.currentTarget); const payload = metricPayload(f); setBusy(true); try { await apiFetch("/api/placement/metrics", { method: "POST", body: JSON.stringify(payload) }); await onRefresh(); onSuccess("Placement tracking updated."); setEditing(null); } catch (error) { onError(error.message); } finally { setBusy(false); } };
+  if (!metrics?.length) return null;
+  return <div className="panel table-panel"><div className="panel-head"><h3>Saved metrics</h3></div>{editing ? <form className="form-card" onSubmit={save}><div className="form-grid"><Select label="Season" name="season_id" defaultValue={editing.season_id}>{(seasons || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select><Select label="Organization" name="organization_id" defaultValue={editing.organization_id}>{organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</Select></div><Select label="Category" name="category_id" defaultValue={editing.category_id || ""}><option value="">Uncategorized</option>{(categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select><div className="form-grid">{[["companies_acquired", "Companies acquired"], ["drives_conducted", "Drives conducted"], ["offers_received", "Offers received"], ["students_placed", "Students placed"], ["students_joined", "Students joined"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue={editing[name] || 0} />)}</div><button className="btn primary" disabled={busy}>Save changes</button><button type="button" className="btn secondary" onClick={() => setEditing(null)}>Cancel</button></form> : <table><thead><tr><th>Organization</th><th>Season</th><th>Placed</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{metrics.map((item) => <tr key={item.id}><td>{organizations.find((o) => String(o.id) === String(item.organization_id))?.name || "Organization"}</td><td>{seasons.find((s) => String(s.id) === String(item.season_id))?.name || "Season"}</td><td>{item.students_placed}</td><td>{item.students_joined}</td><td><button className="text-btn" onClick={() => setEditing(item)}><Pencil size={13} />Edit</button></td></tr>)}</tbody></table>}</div>;
 }
 const root =
   globalThis.__placementCrmRoot || createRoot(document.getElementById("root"));
