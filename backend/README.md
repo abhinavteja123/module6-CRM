@@ -30,4 +30,4 @@ Authentication uses bcrypt cost 11 by default for a practical latency/security b
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-Roles are `super_admin`, `university_admin`, `coordinator`, `regional_manager`, and `placement_manager`. Set `JWT_SECRET` and the bootstrap admin variables in `backend/.env` before starting. The bootstrap admin is created once if no super admin exists; change that password after first login.
+Roles are `super_admin`, `university_admin`, `coordinator`, `data_analyst`, and `placement_manager`. Set `JWT_SECRET` and the bootstrap admin variables in `backend/.env` before starting. The bootstrap admin is created once if no super admin exists; change that password after first login.

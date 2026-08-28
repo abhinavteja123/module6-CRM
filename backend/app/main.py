@@ -1,4 +1,6 @@
 import hashlib
+import json
+import logging
 import os
 import re
 import secrets
@@ -10,6 +12,7 @@ from threading import RLock
 from typing import Any, Literal
 
 import bcrypt
+import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
@@ -18,6 +21,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from supabase import Client, create_client
+from starlette.responses import JSONResponse
 
 load_dotenv()
 
@@ -29,7 +33,6 @@ Role = Literal[
     "data_analyst",
 ]
 TEAM_ROLES = {"coordinator", "placement_manager", "data_analyst"}
-ANALYTICS_ROLES = {"university_admin", "coordinator", "placement_manager", "data_analyst"}
 
 
 class Settings(BaseSettings):
@@ -45,9 +48,13 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "")
     bootstrap_admin_password: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
     bootstrap_admin_name: str = os.getenv("BOOTSTRAP_ADMIN_NAME", "Vextra AI Admin")
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    groq_timeout_seconds: float = float(os.getenv("GROQ_TIMEOUT_SECONDS", "12"))
 
 
 settings = Settings()
+logger = logging.getLogger("vextra_ai_crm")
 if not settings.supabase_url or not settings.supabase_service_role_key:
     raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
 if not settings.jwt_secret or len(settings.jwt_secret) < 32:
@@ -56,6 +63,8 @@ if not 10 <= settings.bcrypt_rounds <= 14:
     raise RuntimeError("BCRYPT_ROUNDS must be between 10 and 14")
 if settings.profile_cache_ttl_seconds < 1:
     raise RuntimeError("PROFILE_CACHE_TTL_SECONDS must be at least 1")
+if settings.groq_timeout_seconds < 3:
+    raise RuntimeError("GROQ_TIMEOUT_SECONDS must be at least 3")
 
 class ThreadSafeRequestBuilder:
     """Serialize Supabase sync-client executions shared by FastAPI worker threads."""
@@ -112,16 +121,22 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
 )
 CORS_ORIGINS = {settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"}
+CORS_ORIGIN_REGEX = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
 
 
 @app.middleware("http")
 async def add_cors_headers_to_error_responses(request: Request, call_next):
     """Keep CORS headers on handled 4xx/5xx responses so the UI can show the real API error."""
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled API error for %s %s", request.method, request.url.path)
+        response = JSONResponse(status_code=500, content={"detail": "The server could not complete this request."})
     origin = request.headers.get("origin")
-    if origin in CORS_ORIGINS:
+    if origin in CORS_ORIGINS or (origin and CORS_ORIGIN_REGEX.fullmatch(origin)):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
@@ -138,6 +153,21 @@ DEFAULT_KANBAN_STAGES = [
 
 def fail(message: str, code: int = 400, payload: dict[str, Any] | None = None):
     raise HTTPException(status_code=code, detail=payload or message)
+
+
+def category_migration_pending(error: Exception) -> bool:
+    message = str(error).lower()
+    return "category_id" in message and ("schema cache" in message or "could not find" in message or "column" in message)
+
+
+def fail_if_category_migration_pending(error: Exception):
+    if category_migration_pending(error):
+        fail(
+            "Company categories are not enabled in the database yet. Apply the latest Supabase migration, then retry.",
+            503,
+            {"code": "organization_category_migration_required", "message": "Apply supabase/migrations/20260828000018_organization_categories.sql"},
+        )
+    raise error
 
 
 def record_audit(
@@ -238,10 +268,13 @@ def safe_contact_for_role(row: dict[str, Any], user: dict[str, Any], organizatio
     """Mask personal contact identity unless the admin granted contact access."""
     if has_crm_area_access(user, "contacts", row.get("organization_id")):
         return {**row, **({"organization_name": organization_name} if organization_name else {})}
+    safe_organization_name = organization_name
+    if user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", row.get("organization_id")):
+        safe_organization_name = "Organization contact"
     return {
         "id": row.get("id"),
         "organization_id": row.get("organization_id"),
-        "organization_name": organization_name or "Organization contact",
+        "organization_name": safe_organization_name or "Organization contact",
         "name": "Contact details protected",
         "designation": "Protected",
         "email": None,
@@ -255,6 +288,17 @@ def safe_contact_for_role(row: dict[str, Any], user: dict[str, Any], organizatio
 def safe_report_for_role(row: dict[str, Any], user: dict[str, Any], organization_name: str | None = None) -> dict[str, Any]:
     if has_crm_area_access(user, "meeting_reports", row.get("organization_id")):
         return {**row, **({"organization_name": organization_name} if organization_name else {})}
+    if user.get("role") == "coordinator":
+        return {
+            **row,
+            "title": "Report activity",
+            "organization_name": "Organization activity",
+            "outcome": "Protected",
+            "attendees": "Protected",
+            "summary": "Report details are protected by the university access policy.",
+            "action_items": "Protected",
+            "action_items_list": [],
+        }
     return {
         **row,
         "organization_name": organization_name or "Organization activity",
@@ -291,7 +335,7 @@ def password_needs_rehash(stored_hash: str | None) -> bool:
     if not stored_hash:
         return False
     try:
-        return int(stored_hash.split("$")[2]) > settings.bcrypt_rounds
+        return int(stored_hash.split("$")[2]) < settings.bcrypt_rounds
     except (IndexError, ValueError):
         return True
 
@@ -395,7 +439,10 @@ def persist_last_login(user_id: str, login_time: str) -> None:
         pass
 
 
-def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict[str, Any]:
+def current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict[str, Any]:
     if not credentials:
         fail("Authentication required", status.HTTP_401_UNAUTHORIZED)
     try:
@@ -407,6 +454,16 @@ def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bear
     user = get_profile(str(decoded["sub"]))
     if not user or user.get("status") != "active":
         fail("Inactive or missing account", status.HTTP_403_FORBIDDEN)
+    if user.get("must_change_password") and (request.method, request.url.path) not in {
+        ("GET", "/api/me"),
+        ("POST", "/api/auth/change-password"),
+        ("POST", "/api/auth/logout"),
+    }:
+        fail(
+            "Change your initial password before using the workspace",
+            status.HTTP_403_FORBIDDEN,
+            {"code": "PASSWORD_CHANGE_REQUIRED", "message": "Change your initial password before using the workspace"},
+        )
     return user
 
 
@@ -493,6 +550,13 @@ def require_owned_or_team(table: str, row_id: str, user: dict[str, Any]) -> dict
     return rows[0]
 
 
+def require_report_links(user: dict[str, Any], organization_id: str, contact_id: str) -> None:
+    organizations = scoped_rows("organizations", user, organization_id).execute().data or []
+    contacts = scoped_rows("contacts", user, contact_id).execute().data or []
+    if not organizations or not contacts or str(contacts[0].get("organization_id")) != str(organization_id):
+        fail("Linked organization and contact must belong to the same company", 400)
+
+
 def can_manage_target(actor: dict[str, Any], target_role: str) -> bool:
     role = actor.get("role")
     if role == "super_admin":
@@ -550,17 +614,18 @@ class PasswordResetRequestIn(BaseModel):
 
 class OrganizationIn(BaseModel):
     name: str = Field(min_length=1)
+    category_id: str = Field(min_length=1)
     expected_ctc: str | None = Field(default=None, min_length=1)
     industry: str = Field(min_length=1)
     website: str = Field(min_length=1)
     city: str = Field(min_length=1)
     status: Literal["prospect", "active", "inactive"]
     notes: str = Field(min_length=1)
-    allow_duplicate: bool = False
 
 
 class OrganizationUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1)
+    category_id: str | None = Field(default=None, min_length=1)
     expected_ctc: str | None = Field(default=None, min_length=1)
     industry: str | None = Field(default=None, min_length=1)
     website: str | None = Field(default=None, min_length=1)
@@ -810,7 +875,15 @@ def refresh(payload: RefreshIn):
     user = get_profile(str(sessions[0]["user_id"]))
     if not user or user.get("status") != "active":
         fail("Inactive or missing account", status.HTTP_401_UNAUTHORIZED)
-    db.table("auth_sessions").update({"revoked_at": now().isoformat()}).eq("id", sessions[0]["id"]).execute()
+    rotated = (
+        db.table("auth_sessions")
+        .update({"revoked_at": now().isoformat()})
+        .eq("id", sessions[0]["id"])
+        .is_("revoked_at", "null")
+        .execute()
+    )
+    if not rotated.data:
+        fail("Invalid or expired refresh token", status.HTTP_401_UNAUTHORIZED)
     return {"user": safe_user(user), "profile": safe_user(user), **issue_tokens(user)}
 
 
@@ -919,7 +992,7 @@ def list_organizations(user=Depends(require_roles("placement_manager", "universi
         owner_names = {str(item["id"]): item["full_name"] for item in owners}
         result = []
         for item in organizations:
-            if user.get("role") == "coordinator" and not has_full_crm_access(user, item.get("id")):
+            if user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", item.get("id")):
                 result.append({"id": item.get("id"), "name": "Organization activity", "industry": None, "website": None, "city": None, "status": item.get("status"), "notes": None, "owner_name": owner_names.get(str(item.get("placement_manager_id")), "Team member"), "placement_manager_id": item.get("placement_manager_id")})
             else:
                 result.append({**item, "owner_name": owner_names.get(str(item.get("placement_manager_id")), "Team member")})
@@ -939,23 +1012,31 @@ def check_duplicate(name: str = Query(min_length=1), user=Depends(require_roles(
 
 @app.post("/api/organizations", status_code=201)
 def create_organization(payload: OrganizationIn, user=Depends(require_roles("placement_manager"))):
+    category = university_rows("company_categories", user).eq("id", payload.category_id).limit(1).execute().data or []
+    if not category:
+        fail("Choose a company category configured by your University Admin", 400)
     duplicate_rows = db.table("organizations").select("id,name,placement_manager_id").ilike("name", payload.name.strip()).eq("university_id", user.get("university_id")).limit(1).execute().data or []
     if duplicate_rows:
-        request_row = db.table("duplicate_company_requests").insert({
+        pending_rows = db.table("duplicate_company_requests").select("id").eq("university_id", user.get("university_id")).eq("requested_by", user["id"]).eq("existing_organization_id", duplicate_rows[0]["id"]).eq("status", "pending").ilike("requested_name", payload.name.strip()).limit(1).execute().data or []
+        request_row = pending_rows[0] if pending_rows else db.table("duplicate_company_requests").insert({
             "university_id": user.get("university_id"),
             "requested_by": user["id"],
             "existing_organization_id": duplicate_rows[0]["id"],
-            "requested_name": payload.name,
-            "requested_payload": payload.model_dump(exclude={"allow_duplicate"}),
+            "requested_name": payload.name.strip(),
+            "requested_payload": payload.model_dump(),
         }).execute().data[0]
-        admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
-        notify_users([str(item["id"]) for item in admins], "duplicate_company_approval", "Duplicate company approval needed", f"{user.get('full_name', 'A team member')} requested to add {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
-        coordinators = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "coordinator").eq("status", "active").execute().data or []
-        notify_users([str(item["id"]) for item in coordinators], "duplicate_company_notice", "Duplicate company request submitted", f"A duplicate company request was sent to the university administrator for {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
+        if not pending_rows:
+            admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
+            notify_users([str(item["id"]) for item in admins], "duplicate_company_approval", "Duplicate company approval needed", f"{user.get('full_name', 'A team member')} requested to add {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
+            coordinators = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "coordinator").eq("status", "active").execute().data or []
+            notify_users([str(item["id"]) for item in coordinators], "duplicate_company_notice", "Duplicate company request submitted", f"A duplicate company request was sent to the university administrator for {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
         fail("This organization already exists. An approval request was sent to the university administrator.", status.HTTP_409_CONFLICT, {"code": "duplicate_approval_required", "request_id": request_row["id"]})
-    data = payload.model_dump(exclude={"allow_duplicate"})
+    data = payload.model_dump()
     data.update({"placement_manager_id": user["id"], "university_id": user.get("university_id")})
-    created = db.table("organizations").insert(data).execute().data[0]
+    try:
+        created = db.table("organizations").insert(data).execute().data[0]
+    except Exception as error:
+        fail_if_category_migration_pending(error)
     record_audit(user, "created", "organization", created.get("id"), user.get("university_id"), {"name": created.get("name"), "status": created.get("status")})
     return created
 
@@ -966,9 +1047,14 @@ def update_organization(item_id: str, payload: OrganizationUpdateIn, user=Depend
     if not current:
         fail("Organization not found", 404)
     updates = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if value is not None}
+    if "category_id" in updates and not university_rows("company_categories", user).eq("id", updates["category_id"]).limit(1).execute().data:
+        fail("Choose a company category configured by your University Admin", 400)
     if not updates:
         fail("No organization changes supplied")
-    result = db.table("organizations").update({**updates, "updated_at": now().isoformat()}).eq("id", item_id).eq("placement_manager_id", user["id"]).execute()
+    try:
+        result = db.table("organizations").update({**updates, "updated_at": now().isoformat()}).eq("id", item_id).eq("placement_manager_id", user["id"]).execute()
+    except Exception as error:
+        fail_if_category_migration_pending(error)
     if not result.data:
         fail("Organization not found", 404)
     record_audit(user, "updated", "organization", item_id, user.get("university_id"), {"fields": list(updates.keys()), "status": result.data[0].get("status")})
@@ -1107,9 +1193,15 @@ def global_search(
         people = profile_list_for_user_ids([str(row.get("placement_manager_id")) for row in organizations if row.get("placement_manager_id")])
         owner_names = {str(item["id"]): item["full_name"] for item in people}
         for organization in organizations:
-            if not matches(organization.get("name"), organization.get("industry"), organization.get("city"), organization.get("status"), owner_names.get(str(organization.get("placement_manager_id")))):
+            masked = user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", organization["id"])
+            searchable_values = (
+                (organization.get("status"), owner_names.get(str(organization.get("placement_manager_id"))))
+                if masked
+                else (organization.get("name"), organization.get("industry"), organization.get("city"), organization.get("status"), owner_names.get(str(organization.get("placement_manager_id"))))
+            )
+            if not matches(*searchable_values):
                 continue
-            if user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", organization["id"]):
+            if masked:
                 result("organization", organization["id"], "Organization activity", f"{organization.get('status', 'active')} · {owner_names.get(str(organization.get('placement_manager_id')), 'Team member')}", {"masked": True, "status": organization.get("status")}, "Organizations")
             else:
                 result("organization", organization["id"], organization.get("name", "Organization"), owner_names.get(str(organization.get("placement_manager_id")), ""), {"industry": organization.get("industry"), "city": organization.get("city"), "status": organization.get("status"), "masked": False}, "Organizations")
@@ -1135,8 +1227,8 @@ def global_search(
                     if not matches(contact.get("name"), contact.get("email"), contact.get("phone"), contact.get("designation"), organization_name):
                         continue
                     result("contact", contact["id"], contact.get("name", "Contact"), organization_name, {"designation": contact.get("designation"), "masked": False}, "Contacts")
-                elif matches(organization_name):
-                    result("contact", contact["id"], "Contact details protected", organization_name, {"masked": True}, "Contacts")
+                elif not term:
+                    result("contact", contact["id"], "Contact details protected", "Protected team activity", {"masked": True}, "Contacts")
             elif matches(contact.get("name"), contact.get("email"), contact.get("phone"), contact.get("designation"), organization_name):
                 result("contact", contact["id"], contact.get("name", "Contact"), organization_name, {"designation": contact.get("designation"), "masked": False}, "Contacts")
 
@@ -1152,23 +1244,29 @@ def global_search(
         org_names = {str(item["id"]): item["name"] for item in (org_rows or [])}
         for report in reports:
             organization_name = org_names.get(str(report.get("organization_id")), "Organization activity")
-            if not matches(report.get("title"), report.get("meeting_date"), report.get("outcome"), organization_name):
+            masked = user.get("role") == "coordinator" and not has_crm_area_access(user, "meeting_reports", report.get("organization_id"))
+            searchable_values = (
+                (report.get("meeting_date"), report.get("follow_up_date"))
+                if masked
+                else (report.get("title"), report.get("meeting_date"), report.get("outcome"), organization_name)
+            )
+            if not matches(*searchable_values):
                 continue
-            if user.get("role") == "coordinator" and not has_crm_area_access(user, "meeting_reports", report.get("organization_id")):
-                result("report", report["id"], "Report activity", "Protected team activity", {"meeting_date": report.get("meeting_date"), "outcome": report.get("outcome"), "follow_up_date": report.get("follow_up_date"), "masked": True}, "Team")
+            if masked:
+                result("report", report["id"], "Report activity", "Protected team activity", {"meeting_date": report.get("meeting_date"), "follow_up_date": report.get("follow_up_date"), "masked": True}, "Team")
             else:
                 result("report", report["id"], report.get("title") or "Meeting report", organization_name, {"meeting_date": report.get("meeting_date"), "outcome": report.get("outcome"), "follow_up_date": report.get("follow_up_date"), "masked": user.get("role") != "placement_manager"}, "Meeting Reports")
 
+    total_results = len(results)
     results = results[cursor:cursor + limit]
-    next_cursor = cursor + limit if len(results) == limit else None
+    next_cursor = cursor + limit if cursor + limit < total_results else None
     return {"results": results, "next_cursor": next_cursor}
 
 
 @app.post("/api/meeting-reports", status_code=201)
 def create_report(payload: ReportIn, user=Depends(require_roles("placement_manager"))):
     data = payload.model_dump(mode="json")
-    if not scoped_rows("organizations", user, data["organization_id"]).execute().data or not scoped_rows("contacts", user, data["contact_id"]).execute().data:
-        fail("Linked organization or contact does not belong to the current manager", 403)
+    require_report_links(user, data["organization_id"], data["contact_id"])
     item_texts = [line.strip() for line in data.pop("action_items").splitlines() if line.strip()]
     report = db.table("meeting_reports").insert({**data, "action_items": "\n".join(item_texts), "placement_manager_id": user["id"]}).execute().data[0]
     items = [{"meeting_report_id": report["id"], "placement_manager_id": user["id"], "text": text, "position": index} for index, text in enumerate(item_texts)]
@@ -1182,8 +1280,7 @@ def create_report(payload: ReportIn, user=Depends(require_roles("placement_manag
 def update_report(report_id: str, payload: ReportIn, user=Depends(require_roles("placement_manager"))):
     require_owned_or_team("meeting_reports", report_id, user)
     data = payload.model_dump(mode="json")
-    if not scoped_rows("organizations", user, data["organization_id"]).execute().data or not scoped_rows("contacts", user, data["contact_id"]).execute().data:
-        fail("Linked organization or contact does not belong to the current manager", 403)
+    require_report_links(user, data["organization_id"], data["contact_id"])
     item_texts = [line.strip() for line in data.pop("action_items").splitlines() if line.strip()]
     report = db.table("meeting_reports").update({**data, "action_items": "\n".join(item_texts)}).eq("id", report_id).eq("placement_manager_id", user["id"]).execute().data[0]
     db.table("meeting_action_items").delete().eq("meeting_report_id", report_id).eq("placement_manager_id", user["id"]).execute()
@@ -1435,7 +1532,11 @@ def create_team_user(payload: UserIn, user=Depends(require_roles("university_adm
 
 
 def create_user(payload: UserIn, actor: dict[str, Any]) -> dict[str, Any]:
-    if get_profile_by_email(payload.email):
+    normalized_email = payload.email.strip().lower()
+    normalized_name = payload.full_name.strip()
+    if not normalized_email or not normalized_name:
+        fail("Email and full name cannot be blank", 400)
+    if get_profile_by_email(normalized_email):
         fail("An account with this email already exists", 409)
     if payload.university_id:
         university = db.table("universities").select("max_accounts").eq("id", payload.university_id).limit(1).execute().data or []
@@ -1445,8 +1546,8 @@ def create_user(payload: UserIn, actor: dict[str, Any]) -> dict[str, Any]:
                 fail("This university has reached its configured account limit", 409, {"code": "ACCOUNT_LIMIT_REACHED", "max_accounts": university[0].get("max_accounts")})
     row = {
         "id": str(uuid.uuid4()),
-        "email": payload.email.strip().lower(),
-        "full_name": payload.full_name.strip(),
+        "email": normalized_email,
+        "full_name": normalized_name,
         "role": payload.role,
         "status": "active",
         "password_hash": password_hash(payload.password),
@@ -1479,9 +1580,14 @@ def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(requi
         fail("You can only manage your own regional managers and placement managers", 403)
     updates: dict[str, Any] = {}
     if payload.full_name is not None:
-        updates["full_name"] = payload.full_name.strip()
+        normalized_name = payload.full_name.strip()
+        if not normalized_name:
+            fail("Full name cannot be blank", 400)
+        updates["full_name"] = normalized_name
     if payload.email is not None:
         normalized_email = payload.email.strip().lower()
+        if not normalized_email:
+            fail("Email cannot be blank", 400)
         existing = get_profile_by_email(normalized_email)
         if existing and str(existing["id"]) != user_id:
             fail("An account with this email already exists", 409)
@@ -1521,7 +1627,7 @@ def delete_team_user(user_id: str, user=Depends(require_roles("university_admin"
         str(target.get("reports_to")) != str(user["id"])
         or target.get("role") not in {"placement_manager"}
     ):
-        fail("You can only manage your own regional managers and placement managers", 403)
+        fail("You can only manage your own placement managers", 403)
     if db.table("profiles").select("id", count="exact").eq("reports_to", user_id).execute().count:
         fail("Deactivate this account instead because it has team members assigned to it", 409)
     owned_tables = ("organizations", "contacts", "meeting_reports", "meeting_action_items", "kanban_cards", "kanban_stages")
@@ -1582,7 +1688,12 @@ def create_season(payload: SeasonIn, user=Depends(require_roles("university_admi
 
 @app.get("/api/placement/assignments")
 def list_assignments(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
-    return university_rows("placement_assignments", user).order("created_at", desc=True).execute().data or []
+    query = university_rows("placement_assignments", user)
+    if user.get("role") == "placement_manager":
+        query = query.eq("user_id", user["id"])
+    elif user.get("role") == "coordinator":
+        query = query.in_("user_id", team_ids(user))
+    return query.order("created_at", desc=True).execute().data or []
 
 
 @app.post("/api/placement/assignments", status_code=201)
@@ -1639,6 +1750,8 @@ def remove_assignment(assignment_id: str, user=Depends(require_roles("university
 
 @app.patch("/api/placement/seasons/{season_id}")
 def update_season(season_id: str, payload: SeasonIn, user=Depends(require_roles("university_admin"))):
+    if payload.end_date < payload.start_date:
+        fail("Season end date must be on or after the start date")
     result = university_rows("placement_seasons", user, user["university_id"]).eq("id", season_id).execute().data or []
     if not result:
         fail("Placement season not found", 404)
@@ -1772,20 +1885,30 @@ def list_metrics(season_id: str | None = None, user=Depends(require_roles("unive
 
 
 @app.post("/api/placement/metrics", status_code=201)
-def upsert_metric(payload: MetricIn, user=Depends(require_roles("placement_manager", "coordinator"))):
+def upsert_metric(payload: MetricIn, user=Depends(require_roles("coordinator"))):
     org = scoped_rows("organizations", user, payload.organization_id).execute().data or []
     if not org:
         fail("Organization is outside your authorized placement scope", 403)
+    season = university_rows("placement_seasons", user).eq("id", payload.season_id).limit(1).execute().data or []
+    if not season:
+        fail("Placement season is outside your university", 400)
+    category_id = org[0].get("category_id") or payload.category_id
+    if category_id and not university_rows("company_categories", user).eq("id", category_id).limit(1).execute().data:
+        fail("Choose a company category configured by your University Admin", 400)
     manager_id = org[0].get("placement_manager_id")
-    data = {**payload.model_dump(), "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
+    data = {**payload.model_dump(), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
     row = db.table("placement_metrics").select("id").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
     if row:
-        return db.table("placement_metrics").update(data).eq("id", row[0]["id"]).execute().data[0]
-    return db.table("placement_metrics").insert(data).execute().data[0]
+        updated = db.table("placement_metrics").update(data).eq("id", row[0]["id"]).execute().data[0]
+        record_audit(user, "updated", "placement_metric", updated.get("id"), user.get("university_id"), {"organization_id": payload.organization_id, "pipeline_status": payload.pipeline_status, "outlook": payload.outlook})
+        return updated
+    created = db.table("placement_metrics").insert(data).execute().data[0]
+    record_audit(user, "created", "placement_metric", created.get("id"), user.get("university_id"), {"organization_id": payload.organization_id, "pipeline_status": payload.pipeline_status, "outlook": payload.outlook})
+    return created
 
 
 @app.get("/api/placement/analytics")
-def placement_analytics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+def placement_analytics(season_id: str | None = None, user=Depends(require_roles("university_admin", "data_analyst"))):
     query = university_rows("placement_metrics", user)
     if season_id:
         query = query.eq("season_id", season_id)
@@ -1811,7 +1934,14 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     outlook_labels = {"positive": "Positive", "neutral": "Neutral", "negative": "Negative"}
     drive_labels = {"not_scheduled": "Not scheduled", "tentative": "Tentative", "scheduled": "Scheduled", "completed": "Completed", "cancelled": "Cancelled"}
     org_ids = list({str(row.get("organization_id")) for row in rows if row.get("organization_id")})
-    org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id").in_("id", org_ids).execute().data if org_ids else []
+    if org_ids:
+        try:
+            org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id,category_id").in_("id", org_ids).execute().data or []
+        except Exception:
+            # Keep analytics readable while an older deployment is waiting for the category migration.
+            org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id").in_("id", org_ids).execute().data or []
+    else:
+        org_rows = []
     org_by_id = {str(item["id"]): item for item in (org_rows or [])}
     people = profile_list_for_user_ids(list({str(row.get("placement_manager_id")) for row in rows if row.get("placement_manager_id")}))
     names = {str(person["id"]): person["full_name"] for person in people}
@@ -1820,17 +1950,21 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     seasons = university_rows("placement_seasons", user).execute().data or []
     season_names = {str(item["id"]): item.get("name") or item.get("academic_year") for item in seasons}
     can_see_company = user.get("role") in {"university_admin", "placement_manager", "data_analyst"} or has_full_crm_access(user)
+    can_see_pipeline_text = can_see_company or (has_crm_area_access(user, "organizations") and has_crm_area_access(user, "meeting_reports"))
     pipeline_rows = []
     for row in rows:
         org = org_by_id.get(str(row.get("organization_id")), {})
         manager_id = str(row.get("placement_manager_id"))
-        category_id = str(row.get("category_id")) if row.get("category_id") else None
+        category_id = str(row.get("category_id") or org.get("category_id")) if (row.get("category_id") or org.get("category_id")) else None
         pipeline_rows.append({
             **row,
+            "category_id": category_id,
             "organization_name": org.get("name") if can_see_company else "Organization activity",
             "city": org.get("city") if can_see_company else None,
             "industry": org.get("industry") if can_see_company else None,
             "organization_status": org.get("status"),
+            "notes": row.get("notes") if can_see_pipeline_text else None,
+            "next_action": row.get("next_action") if can_see_pipeline_text else None,
             "placement_manager_name": names.get(manager_id, "Placement manager"),
             "season_name": season_names.get(str(row.get("season_id")), "Season"),
             "category_name": category_names.get(category_id, "Uncategorized"),
@@ -1850,6 +1984,18 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     by_manager: dict[str, dict[str, Any]] = {}
     by_season: dict[str, dict[str, Any]] = {}
     by_category: dict[str, dict[str, Any]] = {}
+    category_tracked_ids: dict[str, set[str]] = {}
+    for category_row in category_rows:
+        category_id = str(category_row.get("id"))
+        by_category[category_id] = {
+            "category_id": category_row.get("id"),
+            "category_name": category_row.get("name") or "Category",
+            "organizations_tracked": 0,
+            "status_counts": {key: 0 for key in status_labels},
+            **{key: 0 for key in keys},
+            **{key: 0 for key in target_keys},
+        }
+        category_tracked_ids[category_id] = set()
     by_city: dict[str, dict[str, Any]] = {}
     for row in rows:
         manager = str(row.get("placement_manager_id"))
@@ -1858,11 +2004,22 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
             item[key] += int(row.get(key) or 0)
         season = str(row.get("season_id"))
         season_item = by_season.setdefault(season, {"season_id": season, **{key: 0 for key in keys}})
-        category = str(row.get("category_id") or "uncategorized")
-        category_item = by_category.setdefault(category, {"category_id": None if category == "uncategorized" else category, "category_name": "Uncategorized" if category == "uncategorized" else category, **{key: 0 for key in keys}})
+        category = str(row.get("category_id") or org_by_id.get(str(row.get("organization_id")), {}).get("category_id") or "uncategorized")
+        category_item = by_category.setdefault(category, {
+            "category_id": None if category == "uncategorized" else category,
+            "category_name": "Uncategorized" if category == "uncategorized" else category,
+            "organizations_tracked": 0,
+            "status_counts": {key: 0 for key in status_labels},
+            **{key: 0 for key in keys},
+            **{key: 0 for key in target_keys},
+        })
         for key in keys:
             season_item[key] += int(row.get(key) or 0)
             category_item[key] += int(row.get(key) or 0)
+        if row.get("organization_id"):
+            category_tracked_ids.setdefault(category, set()).add(str(row["organization_id"]))
+        pipeline_status = row.get("pipeline_status") or "prospect"
+        category_item["status_counts"][pipeline_status] = category_item["status_counts"].get(pipeline_status, 0) + 1
     manager_ids = list({str(row.get("placement_manager_id")) for row in rows if row.get("placement_manager_id")})
     city_by_org = {str(item["id"]): item.get("city") or "Unspecified" for item in (org_rows or [])}
     for row in rows:
@@ -1883,6 +2040,20 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
         item = by_manager.setdefault(manager_id, {"placement_manager_id": manager_id, "placement_manager_name": names.get(manager_id, "Placement manager"), **{key: 0 for key in keys}})
         for target_key in target_keys:
             item[target_key] = item.get(target_key, 0) + int(target.get(target_key) or 0)
+        category = str(target.get("category_id") or "uncategorized")
+        category_item = by_category.setdefault(category, {
+            "category_id": None if category == "uncategorized" else category,
+            "category_name": category_names.get(category, "Uncategorized" if category == "uncategorized" else category),
+            "organizations_tracked": 0,
+            "status_counts": {key: 0 for key in status_labels},
+            **{key: 0 for key in keys},
+            **{key: 0 for key in target_keys},
+        })
+        for target_key in target_keys:
+            category_item[target_key] = category_item.get(target_key, 0) + int(target.get(target_key) or 0)
+    for category, item in by_category.items():
+        item["organizations_tracked"] = len(category_tracked_ids.get(category, set()))
+        item["category_name"] = category_names.get(str(item.get("category_id")), item.get("category_name") or "Uncategorized")
     return {
         "totals": totals,
         "target_totals": target_totals,
@@ -1909,9 +2080,166 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     }
 
 
+NLP_EARLY_STAGES = {"prospect", "outreach", "in_talks", "discussion", "proposal_shared", "negotiation", "on_hold"}
+NLP_CLOSED_STAGES = {"joined", "cancelled"}
+
+
+def redact_text_for_ai(value: Any, limit: int = 500) -> str:
+    """Remove common direct identifiers before CRM text is sent to an external model."""
+    text = str(value or "")
+    text = re.sub(r"https?://\S+|www\.\S+", "[url]", text, flags=re.IGNORECASE)
+    text = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[email]", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", "[phone]", text)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def make_deterministic_nlp_insights(analytics: dict[str, Any], reports: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = analytics.get("rows") or []
+    today = date.today().isoformat()
+    refs = {str(row.get("id")): f"Company {index + 1}" for index, row in enumerate(rows)}
+    def ref(row: dict[str, Any]) -> str:
+        return refs.get(str(row.get("id")), "Company")
+    def label(row: dict[str, Any]) -> str:
+        return str(row.get("organization_name") or ref(row))
+    overdue = [row for row in rows if row.get("next_follow_up_date") and str(row["next_follow_up_date"]) < today and row.get("pipeline_status") not in NLP_CLOSED_STAGES]
+    negative = [row for row in rows if row.get("outlook") == "negative" and row.get("pipeline_status") not in NLP_CLOSED_STAGES]
+    stalled = [row for row in rows if row.get("pipeline_status") in NLP_EARLY_STAGES and (not row.get("next_follow_up_date") or (row.get("last_contact_date") and (date.today() - date.fromisoformat(str(row["last_contact_date"])[:10])).days > 14))]
+    upcoming = [row for row in rows if row.get("expected_date") and today <= str(row["expected_date"]) <= (date.today() + timedelta(days=30)).isoformat() and row.get("pipeline_status") not in NLP_CLOSED_STAGES]
+    opportunities = [row for row in rows if row.get("outlook") == "positive" and int(row.get("company_probability") or 0) >= 70 and row.get("pipeline_status") not in NLP_CLOSED_STAGES]
+    insights: list[dict[str, Any]] = []
+    def add(kind: str, severity: str, title: str, detail: str, selected: list[dict[str, Any]], action: str):
+        if selected:
+            insights.append({"type": kind, "severity": severity, "title": title, "detail": detail, "company_refs": [ref(row) for row in selected[:6]], "company_labels": [label(row) for row in selected[:6]], "recommended_action": action})
+    add("risk", "high", "Overdue follow-ups need attention", f"{len(overdue)} compan{'y' if len(overdue) == 1 else 'ies'} have a follow-up date in the past.", overdue, "Assign an owner and complete the next contact before the opportunity goes cold.")
+    add("risk", "high", "Negative outlook is building", f"{len(negative)} compan{'y' if len(negative) == 1 else 'ies'} are marked negative and are still active.", negative, "Review the blocker in the latest note and decide whether to recover, pause, or close the opportunity.")
+    add("risk", "medium", "Early-stage companies may be stalled", f"{len(stalled)} compan{'y' if len(stalled) == 1 else 'ies'} remain in an early stage without a recent contact or clear follow-up.", stalled, "Set a dated next action and move the company to the next confirmed stage.")
+    add("momentum", "info", "Upcoming placement activity", f"{len(upcoming)} compan{'y' if len(upcoming) == 1 else 'ies'} have an expected date within the next 30 days.", upcoming, "Confirm drive logistics, student readiness, and the employer point of contact.")
+    add("opportunity", "low", "High-confidence opportunities", f"{len(opportunities)} active compan{'y' if len(opportunities) == 1 else 'ies'} combine a positive outlook with at least 70% probability.", opportunities, "Prioritize the next conversion step and keep the expected date current.")
+    if not insights:
+        insights.append({"type": "status", "severity": "info", "title": "No urgent signals detected", "detail": "The current placement view has no overdue, negative, stalled, or near-term risks identified by the rules engine.", "company_refs": [], "company_labels": [], "recommended_action": "Continue updating pipeline stages, dates, and notes after each company interaction."})
+    summary = analytics.get("summary") or {}
+    narrative = f"The current view contains {summary.get('companies_in_pipeline', 0)} active placement compan{'y' if summary.get('companies_in_pipeline', 0) == 1 else 'ies'}, with {summary.get('positive_outlook', 0)} positive and {summary.get('negative_outlook', 0)} negative outlook signals."
+    return {"summary": narrative, "insights": insights[:8], "reports_considered": len(reports)}
+
+
+def normalize_groq_insights(value: Any, known_refs: set[str], known_labels: dict[str, str]) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    summary = redact_text_for_ai(value.get("summary"), 700)
+    raw_insights = value.get("insights") if isinstance(value.get("insights"), list) else []
+    insights = []
+    for item in raw_insights[:8]:
+        if not isinstance(item, dict):
+            continue
+        refs = []
+        if isinstance(item.get("company_refs"), list):
+            for raw_ref in item["company_refs"]:
+                candidate = raw_ref.get("ref") or raw_ref.get("company_ref") if isinstance(raw_ref, dict) else raw_ref
+                if str(candidate) in known_refs:
+                    refs.append(str(candidate))
+        insights.append({
+            "type": str(item.get("type") or "status")[:30],
+            "severity": str(item.get("severity") or "info")[:20],
+            "title": redact_text_for_ai(item.get("title"), 140) or "Placement insight",
+            "detail": redact_text_for_ai(item.get("detail"), 500),
+            "company_refs": refs,
+            "company_labels": [known_labels[ref] for ref in refs],
+            "recommended_action": redact_text_for_ai(item.get("recommended_action"), 300),
+        })
+    if not summary and not insights:
+        return None
+    return {"summary": summary, "insights": insights, "reports_considered": 0}
+
+
+def groq_placement_insights(context: dict[str, Any], known_refs: set[str], known_labels: dict[str, str]) -> dict[str, Any] | None:
+    if not settings.groq_api_key:
+        return None
+    system_prompt = (
+        "You are a cautious placement operations analyst. Use only the supplied JSON. "
+        "Do not invent facts, names, dates, or counts. Return JSON only with this shape: "
+        "{summary:string, insights:[{type:string,severity:string,title:string,detail:string,company_refs:string[],recommended_action:string}]}. "
+        "Use company_refs exactly as supplied (for example Company 1). Keep the summary under 80 words and return at most 8 concise insights."
+    )
+    payload = {
+        "model": settings.groq_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1400,
+    }
+    try:
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {settings.groq_api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=settings.groq_timeout_seconds,
+        )
+        response.raise_for_status()
+        content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(content).strip(), flags=re.IGNORECASE)
+        return normalize_groq_insights(json.loads(content), known_refs, known_labels)
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError):
+        return None
+
+
+@app.get("/api/placement/analytics/insights")
+def placement_analytics_insights(season_id: str | None = None, user=Depends(require_roles("university_admin", "data_analyst"))):
+    analytics = placement_analytics(season_id=season_id, user=user)
+    rows = analytics.get("rows") or []
+    row_refs = {str(row.get("id")): f"Company {index + 1}" for index, row in enumerate(rows)}
+    known_refs = set(row_refs.values())
+    known_labels = {row_refs[str(row.get("id"))]: str(row.get("organization_name") or row_refs[str(row.get("id"))]) for row in rows}
+    org_ids = list({str(row.get("organization_id")) for row in rows if row.get("organization_id")})
+    reports = db.table("meeting_reports").select("organization_id,meeting_date,summary,action_items,follow_up_date").in_("organization_id", org_ids).order("meeting_date", desc=True).limit(200).execute().data if org_ids else []
+    reports = reports or []
+    deterministic = make_deterministic_nlp_insights(analytics, reports)
+    allow_crm_text = user.get("role") in {"university_admin", "placement_manager", "data_analyst"} or (has_crm_area_access(user, "organizations") and has_crm_area_access(user, "meeting_reports"))
+    context_rows = []
+    for row in rows[:80]:
+        ref_name = row_refs.get(str(row.get("id")), "Company")
+        context_rows.append({
+            "company_ref": ref_name,
+            "stage": row.get("pipeline_status_label"),
+            "outlook": row.get("outlook_label"),
+            "probability": row.get("company_probability") or 0,
+            "expected_date": row.get("expected_date"),
+            "drive_status": row.get("drive_status_label"),
+            "drive_date": row.get("drive_date"),
+            "next_follow_up_date": row.get("next_follow_up_date"),
+            "students_registered": row.get("students_registered") or 0,
+            "students_selected": row.get("students_selected") or 0,
+            "offers_received": row.get("offers_received") or 0,
+            "students_placed": row.get("students_placed") or 0,
+            "students_joined": row.get("students_joined") or 0,
+            "note_excerpt": redact_text_for_ai(row.get("notes")) if allow_crm_text else None,
+        })
+    context_reports = []
+    if allow_crm_text:
+        for report in reports[:120]:
+            report_ref = next((row_refs.get(str(row.get("id"))) for row in rows if str(row.get("organization_id")) == str(report.get("organization_id"))), None)
+            if report_ref:
+                context_reports.append({"company_ref": report_ref, "meeting_date": report.get("meeting_date"), "summary": redact_text_for_ai(report.get("summary")), "action_items": redact_text_for_ai(report.get("action_items"))})
+    ai = groq_placement_insights({"summary": analytics.get("summary"), "totals": analytics.get("totals"), "target_totals": analytics.get("target_totals"), "companies": context_rows, "recent_reports": context_reports}, known_refs, known_labels)
+    result = ai or deterministic
+    return {**result, "provider": "groq" if ai else "deterministic", "groq_configured": bool(settings.groq_api_key), "model": settings.groq_model if ai else None, "generated_at": now().isoformat(), "note": "AI insights use redacted CRM text and remain advisory. Deterministic insights are shown when Groq is unavailable."}
+
+
 @app.get("/api/placement/access")
 def list_access_grants(user=Depends(require_roles("university_admin"))):
     return university_rows("placement_access_grants", user).execute().data or []
+
+
+@app.get("/api/placement/access/me")
+def get_my_access_grant(user=Depends(require_roles("coordinator"))):
+    rows = (db.table("placement_access_grants")
+        .select("access_level,permissions,created_at")
+        .eq("university_id", user["university_id"])
+        .eq("granted_to", user["id"])
+        .eq("scope", "crm")
+        .limit(1).execute().data or [])
+    return rows[0] if rows else {"access_level": "none", "permissions": {}}
 
 
 @app.post("/api/placement/access", status_code=201)
@@ -1941,13 +2269,20 @@ def review_duplicate_request(request_id: str, payload: DuplicateReviewIn, user=D
     if not rows:
         fail("Duplicate company request not found", 404)
     request_row = rows[0]
+    if request_row.get("status") != "pending":
+        fail("This duplicate company request has already been reviewed", status.HTTP_409_CONFLICT)
     updates = {"status": payload.status, "reviewed_by": user["id"], "review_note": payload.review_note, "reviewed_at": now().isoformat()}
-    updated = db.table("duplicate_company_requests").update(updates).eq("id", request_id).execute().data[0]
+    updated_rows = db.table("duplicate_company_requests").update(updates).eq("id", request_id).eq("status", "pending").execute().data or []
+    if not updated_rows:
+        fail("This duplicate company request has already been reviewed", status.HTTP_409_CONFLICT)
+    updated = updated_rows[0]
     if payload.status == "approved":
-        body = dict(request_row.get("requested_payload") or {})
+        requested_payload = dict(request_row.get("requested_payload") or {})
+        body = {key: requested_payload[key] for key in ("name", "category_id", "expected_ctc", "industry", "website", "city", "status", "notes") if key in requested_payload}
         body["placement_manager_id"] = request_row["requested_by"]
         body["university_id"] = user["university_id"]
         body["duplicate_approved"] = True
         db.table("organizations").insert(body).execute()
+    record_audit(user, "reviewed", "duplicate_company_request", request_id, user["university_id"], {"status": payload.status, "requested_by": request_row.get("requested_by")})
     create_notification(request_row["requested_by"], "duplicate_company_reviewed", f"Duplicate company request {payload.status}", f"Your request for {request_row['requested_name']} was {payload.status}.", user["university_id"], "duplicate_company_request", request_id, "Organizations")
     return updated

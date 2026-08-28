@@ -48,7 +48,9 @@ async function request(path, options = {}, token = getAccessToken()) {
   const response = await fetch(`${apiBase}${path}`, { ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(body.detail?.message || body.detail || body.error || "API request failed");
+    const detail = body.detail;
+    const message = typeof detail === "string" ? detail : detail?.message || body.error || "API request failed";
+    const error = new Error(message);
     error.status = response.status;
     error.payload = body.detail || body;
     throw error;
