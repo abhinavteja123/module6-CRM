@@ -1,0 +1,96 @@
+- generic [ref=e22]:
+  - complementary [ref=e23]:
+    - generic [ref=e24]:
+      - generic [ref=e25]: P
+      - generic [ref=e26]:
+        - strong [ref=e27]: VextraAI
+        - generic [ref=e28]: RELATIONSHIP OS
+    - generic [ref=e29]: WORKSPACE
+    - navigation [ref=e30]:
+      - button "Overview" [ref=e31] [cursor=pointer]
+      - button "Universities" [active] [ref=e38] [cursor=pointer]
+      - button "Users" [ref=e44] [cursor=pointer]
+    - button "Sign out" [ref=e52] [cursor=pointer]
+  - main [ref=e56]:
+    - generic [ref=e57]:
+      - generic [ref=e58]:
+        - paragraph [ref=e59]: VEXTRA AI ADMIN
+        - heading "Universities" [level=1] [ref=e238]
+      - generic [ref=e61]:
+        - button "Open global search" [ref=e62] [cursor=pointer]:
+          - generic [ref=e66]: Search everything
+          - generic [ref=e67]: Ctrl K
+        - button "Open notifications" [ref=e69] [cursor=pointer]
+        - generic [ref=e73]:
+          - generic [ref=e74]: VA
+          - generic [ref=e75]:
+            - text: Vextra AI Admin
+            - generic [ref=e76]: super admin
+          - button "Change password" [ref=e77] [cursor=pointer]
+    - generic [ref=e82]:
+      - generic [ref=e83]:
+        - text: Updated 07:11 PM
+        - button "Refresh" [ref=e87] [cursor=pointer]
+      - generic [ref=e239]:
+        - generic [ref=e240]:
+          - paragraph [ref=e241]: TENANT MANAGEMENT
+          - heading "Universities" [level=2] [ref=e242]
+          - paragraph [ref=e243]: Each university receives its own administrative scope.
+        - button "Add university" [ref=e244] [cursor=pointer]
+      - generic [ref=e246]:
+        - textbox "Search universities" [ref=e251]
+        - combobox "Filter universities by status" [ref=e252] [cursor=pointer]:
+          - option "All statuses" [selected]
+          - option "Active"
+          - option "Inactive"
+        - combobox "Filter universities by city" [ref=e253] [cursor=pointer]:
+          - option "All cities" [selected]
+          - option "Amravati"
+          - option "Vizag"
+      - table [ref=e256]:
+        - rowgroup [ref=e257]:
+          - row [ref=e258]:
+            - columnheader "University" [ref=e259]
+            - columnheader "Admin" [ref=e260]
+            - columnheader "Plan" [ref=e261]
+            - columnheader "Accounts used" [ref=e262]
+            - columnheader "Allowed accounts" [ref=e263]
+            - columnheader "Expiry" [ref=e264]
+            - columnheader "Code" [ref=e265]
+            - columnheader "City" [ref=e266]
+            - columnheader "Status" [ref=e267]
+            - columnheader "Created" [ref=e268]
+            - columnheader "Actions" [ref=e269]
+        - rowgroup [ref=e270]:
+          - row [ref=e271]:
+            - cell [ref=e272]:
+              - button "Gitam University" [ref=e273] [cursor=pointer]
+            - cell "Registrar" [ref=e274]
+            - cell "Standard" [ref=e275]
+            - cell "5" [ref=e276]
+            - cell "100" [ref=e277]
+            - cell "2027-11-11" [ref=e278]
+            - cell "GITAM" [ref=e279]
+            - cell "Vizag" [ref=e280]
+            - cell "active" [ref=e281]
+            - cell "8/26/2026" [ref=e283]
+            - cell [ref=e284]:
+              - generic [ref=e285]:
+                - button "Edit" [ref=e286] [cursor=pointer]
+                - button "Deactivate" [ref=e290] [cursor=pointer]
+          - row [ref=e291]:
+            - cell [ref=e292]:
+              - button "SRM University" [ref=e293] [cursor=pointer]
+            - cell "SRM Head" [ref=e294]
+            - cell "Standard" [ref=e295]
+            - cell "5" [ref=e296]
+            - cell "50" [ref=e297]
+            - cell "2027-11-18" [ref=e298]
+            - cell "SRMAP" [ref=e299]
+            - cell "Amravati" [ref=e300]
+            - cell "active" [ref=e301]
+            - cell "8/25/2026" [ref=e303]
+            - cell [ref=e304]:
+              - generic [ref=e305]:
+                - button "Edit" [ref=e306] [cursor=pointer]
+                - button "Deactivate" [ref=e310] [cursor=pointer]

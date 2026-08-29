@@ -25,6 +25,8 @@ Date: 2026-08-29
 
 The page uses a Power BI-style canvas with a compact global slicer bar at the top. The slicers are Cycle, Manager, Category, City, Pipeline Stage, Outlook, Drive Status, Date Range, and free-text search. Active filters are visible and can be removed individually; Reset all filters returns to the consolidated view.
 
+The hero also provides an Ask analytics view. It accepts a plain-language question and sends the question plus the active slicers to the protected analytics query endpoint. The backend recomputes the filtered context, then uses the configured Groq model when available. A deterministic rules-based answer remains available when the model is not configured or a provider request fails. Answers are paragraph-first, read-only, advisory, and show the filtered record count plus any referenced records.
+
 The visual flow is:
 
 1. KPI strip: targets, actuals, achievement, and conversion.
@@ -47,3 +49,5 @@ Sections are compact and collapsible. Desktop keeps slicers visible; smaller scr
 | Use collapsible sections and contained tables | More dense fixed tables | Improves scanning, mobile behavior, and large-team usability. |
 | Keep charts CSS-based | Add a charting dependency | Lower maintenance and bundle risk for the required visuals. |
 | Keep analytics read-only | Add editing to the canvas | Preserves responsibility boundaries and avoids accidental data changes. |
+| Scope natural-language answers to the active slicers | Query the entire tenant regardless of the visible view | Keeps the answer explainable and prevents the query mode from contradicting the canvas below it. |
+| Provide a deterministic fallback | Make the AI provider mandatory | Keeps local development and deployments without a provider key useful while remaining transparent to the admin. |

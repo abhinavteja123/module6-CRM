@@ -1134,7 +1134,7 @@ function Workspace({ role, user, profile, onLogout }) {
     ) : superAdmin && active === "Universities" ? (
       <UniversityDirectory universities={universities} users={managers} onAdd={() => setModal("university")} onEdit={(university) => { setEditingUniversity(university); setModal("edit-university"); }} onToggleStatus={updateUniversity} />
     ) : superAdmin && active === "Users" ? (
-      <RoleUsers users={managers} universities={universities} currentUserId={user?.id} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} />
+      <RoleUsers users={managers} universities={universities} currentUserId={user?.id} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} onEditUniversity={(university) => { setEditingUniversity(university); setModal("edit-university"); }} />
     ) : (universityAdmin || supervisor) && active === "Team" ? (
       <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={universityAdmin || role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={false} masked={supervisor} />
     ) : universityAdmin && active === "Direct Team" ? (
@@ -1800,7 +1800,7 @@ function TeamTable({ users, masked }) {
   return <div className="team-table-scroll" role="region" aria-label="Team activity table" tabIndex="0"><table className="team-activity-table"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Organizations</th><th>Contacts</th><th>Reports</th><th>Last report</th><th>Follow-ups</th><th>Report tracking</th><th>Pipeline</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td><b>{item.full_name}</b><small>{item.email}</small></td><td>{item.role.replaceAll("_", " ")}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.organization_count ?? 0}{masked && <small> masked</small>}</td><td>{item.contact_count ?? 0}{masked && <small> masked</small>}</td><td>{item.report_count ?? 0}</td><td>{item.last_report_date ? new Date(item.last_report_date).toLocaleDateString() : "Never"}</td><td><span className={item.overdue_followups ? "danger-number" : ""}>{item.overdue_followups ?? 0} overdue</span><small>{item.pending_actions ?? 0} pending action{item.pending_actions === 1 ? "" : "s"}</small></td><td><span className={`report-status ${String(item.report_status || "").toLowerCase().replaceAll(" ", "-")}`}>{item.report_status || "Not tracked"}</span></td><td>{item.card_count ?? 0}</td></tr>)}</tbody></table></div>;
 }
 
-function RoleUsers({ users, universities = [], currentUserId, directReportsTo, onAdd, onDeactivate, onReactivate, onEdit, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
+function RoleUsers({ users, universities = [], currentUserId, directReportsTo, onAdd, onDeactivate, onReactivate, onEdit, onEditUniversity, onRemove, superAdmin = false, hierarchy = false, masked = false }) {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -1834,6 +1834,7 @@ function RoleUsers({ users, universities = [], currentUserId, directReportsTo, o
   );
   const roleOrder = { university_admin: 0, coordinator: 1, placement_manager: 2, data_analyst: 3 };
   const sortAccounts = (items) => [...items].sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9) || String(a.full_name || "").localeCompare(String(b.full_name || "")));
+  const sortAdministrators = (items) => [...items].sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime() || String(a.full_name || "").localeCompare(String(b.full_name || "")));
   const accountRow = (item, depth = 0) => <tr key={item.id}>
     <td><div className={depth ? "hierarchy-name hierarchy-child" : "hierarchy-name"} style={{ paddingLeft: `${depth * 24}px` }}>{superAdmin ? <button className="account-name-button" onClick={() => setSelectedAccount(item)}><b>{item.full_name}</b><small>{item.email}</small></button> : <><b>{item.full_name}</b><small>{item.email}</small></>}</div></td>
     <td>{roleLabel(item.role)}</td>
@@ -1843,7 +1844,7 @@ function RoleUsers({ users, universities = [], currentUserId, directReportsTo, o
   </tr>;
   const universityGroups = [...universities].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))).map((university) => ({
     ...university,
-    admin: filteredUsers.find((item) => String(item.university_id) === String(university.id) && item.role === "university_admin"),
+    admin: sortAdministrators(filteredUsers.filter((item) => String(item.university_id) === String(university.id) && item.role === "university_admin"))[0],
     members: filteredUsers.filter((item) => String(item.university_id) === String(university.id) && item.role !== "university_admin"),
     totalMembers: directoryUsers.filter((item) => String(item.university_id) === String(university.id) && item.role !== "university_admin").length,
   })).filter((group) => group.admin || group.members.length || (!search && !roleFilter && !statusFilter && !universityFilter));
@@ -1899,8 +1900,8 @@ function RoleUsers({ users, universities = [], currentUserId, directReportsTo, o
         const isOpen = expanded[group.id];
         return <section className="university-account-group panel" key={group.id}>
           <div className="university-admin-row">
-            <div><p className="eyebrow">UNIVERSITY ADMIN</p>{group.admin ? <button className="account-name-button admin-account-name" onClick={() => setSelectedAccount(group.admin)}><h3>{group.admin.full_name}</h3><p className="muted">{group.admin.email}</p></button> : <><h3>No administrator assigned</h3><p className="muted">Assign an administrator to manage this university</p></>}</div>
-            <div className="university-admin-meta">{group.admin ? <><span className={`badge ${group.admin.status}`}>{group.admin.status}</span>{accountActions(group.admin)}</> : <span className="muted">{group.totalMembers} account{group.totalMembers === 1 ? "" : "s"}</span>}</div>
+            <div><p className="eyebrow">UNIVERSITY</p><h3>{group.name}</h3>{group.admin ? <button className="account-name-button admin-account-name" onClick={() => setSelectedAccount(group.admin)}><p className="muted"><b>{group.admin.full_name}</b></p><p className="muted">{group.admin.email}</p></button> : <p className="muted">No administrator assigned</p>}</div>
+            <div className="university-admin-meta">{group.admin ? <><span className={`badge ${group.admin.status}`}>{group.admin.status}</span>{onEditUniversity && <button className="text-btn" onClick={() => onEditUniversity(group)}><Pencil size={13} />Edit university</button>}{accountActions(group.admin)}</> : <><span className="muted">{group.totalMembers} account{group.totalMembers === 1 ? "" : "s"}</span>{onEditUniversity && <button className="text-btn" onClick={() => onEditUniversity(group)}><Pencil size={13} />Edit university</button>}</>}</div>
           </div>
           <div className="university-group-footer"><span>{group.members.length} team account{group.members.length === 1 ? "" : "s"}{group.members.length !== group.totalMembers && " matching filters"}</span><button className="text-btn" aria-expanded={Boolean(isOpen)} onClick={() => setExpanded((prev) => ({ ...prev, [group.id]: !prev[group.id] }))}>{isOpen ? "Hide accounts" : "View accounts"}</button></div>
           {isOpen && <div className="directory-table"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{sortAccounts(group.members).map((item) => accountRow(item, 0))}</tbody></table>{!group.members.length && <div className="empty-state"><p className="muted">No team accounts match the current filters.</p></div>}</div>}
@@ -2650,6 +2651,11 @@ function PlacementAnalyticsCanvas({ analytics, data = {}, role }) {
   const [search, setSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [expandedRows, setExpandedRows] = useState(new Set());
+  const [viewMode, setViewMode] = useState("canvas");
+  const [query, setQuery] = useState("");
+  const [queryResult, setQueryResult] = useState(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState("");
   const allRows = analytics?.rows || [];
   const seasons = data.seasons || [];
   const targets = data.targets || [];
@@ -2712,12 +2718,56 @@ function PlacementAnalyticsCanvas({ analytics, data = {}, role }) {
   const resetFilters = () => { setCycleFilter(""); setManagerFilter(""); setCategoryFilter(""); setIndustryFilter(""); setCityFilter(""); setStatusFilter(""); setOutlookFilter(""); setDriveFilter(""); setDateFilter(""); setFocusFilter(""); setSearch(""); localStorage.removeItem("placement-season-filter"); };
   const removeFilter = (key) => ({ cycle: () => setCycleFilter(""), manager: () => setManagerFilter(""), category: () => setCategoryFilter(""), industry: () => setIndustryFilter(""), city: () => setCityFilter(""), status: () => setStatusFilter(""), outlook: () => setOutlookFilter(""), drive: () => setDriveFilter(""), date: () => setDateFilter(""), focus: () => setFocusFilter(""), search: () => setSearch("") }[key]?.());
   const setCycle = (value) => { setCycleFilter(value); if (value) localStorage.setItem("placement-season-filter", value); else localStorage.removeItem("placement-season-filter"); };
+  const suggestedQuestions = [
+    "What needs attention right now?",
+    "Are we on track against targets?",
+    "Which manager is leading on placements?",
+    "Where is the pipeline strongest?",
+  ];
+  const askAnalytics = async (questionOverride) => {
+    const questionText = String(questionOverride ?? query).trim();
+    if (!questionText) return;
+    setQuery(questionText);
+    setQueryLoading(true);
+    setQueryError("");
+    try {
+      const result = await apiFetch("/api/placement/analytics/query", {
+        method: "POST",
+        body: JSON.stringify({
+          question: questionText,
+          season_id: cycleFilter || null,
+          filters: {
+            manager: managerFilter,
+            category: categoryFilter,
+            industry: industryFilter,
+            city: cityFilter,
+            status: statusFilter,
+            outlook: outlookFilter,
+            drive: driveFilter,
+            date: dateFilter,
+            focus: focusFilter,
+            search: search.trim(),
+          },
+        }),
+      });
+      setQueryResult(result);
+    } catch (requestError) {
+      setQueryResult(null);
+      setQueryError(requestError.message || "The analytics answer could not be generated.");
+    } finally {
+      setQueryLoading(false);
+    }
+  };
   useEffect(() => {
     if (cycleFilter && seasons.length && !seasons.some((season) => String(season.id) === String(cycleFilter))) setCycle("");
   }, [seasons, cycleFilter]);
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("placement-season-filter-change", { detail: cycleFilter }));
   }, [cycleFilter]);
+  useEffect(() => {
+    setQueryResult(null);
+    setQueryError("");
+  }, [cycleFilter, managerFilter, categoryFilter, industryFilter, cityFilter, statusFilter, outlookFilter, driveFilter, dateFilter, focusFilter, search]);
   const aggregate = (key, labelKey) => {
     const map = new Map();
     rows.forEach((row) => {
@@ -2738,7 +2788,8 @@ function PlacementAnalyticsCanvas({ analytics, data = {}, role }) {
   const exportRows = [["Company", "Manager", "Cycle", "Category", "Industry", "Pipeline stage", "Outlook", "Expected date", "Drive status", "Registered", "Selected", "Offers", "Placed", "Joined", "Follow-up", "Next action"], ...rows.map((row) => [row.organization_name, row.placement_manager_name, row.season_name, row.category_name, row.industry, row.pipeline_status_label, row.outlook_label, row.expected_date, row.drive_status_label, row.students_registered, row.students_selected, row.offers_received, row.students_placed, row.students_joined, row.next_follow_up_date, row.next_action])];
   const kpis = [["Companies acquired", totals.companies_acquired, `${progress}% of target`], ["Company target", targetTotals.companies_target, `${progress}% acquired`], ["Drives completed", totals.drives_conducted, `${driveCounts.completed || 0} completed`], ["Offers received", totals.offers_received, `${conversionRate("students_selected", "offers_received")}% of selected`], ["Students placed", totals.students_placed, `${conversionRate("offers_received", "students_placed")}% of offers`], ["Students joined", totals.students_joined, `${conversionRate("students_placed", "students_joined")}% of placed`], ["Active pipeline", summary.active, `${rows.length} tracked records`], ["Needs attention", summary.overdue + summary.negative, `${summary.overdue} overdue · ${summary.negative} negative`]];
   return <div className="dashboard analytics-canvas">
-    <div className="analytics-canvas-hero"><div><p className="eyebrow">{role === "data_analyst" ? "ANALYTICS WORKSPACE" : "PLACEMENT INTELLIGENCE"}</p><h2>Placement analytics</h2><p className="muted">A decision-ready view of targets, pipeline health, outcomes, and follow-through for {cycleName.toLowerCase()}.</p></div><div className="analytics-hero-actions"><span className="analytics-view-badge"><span className="status-dot" />Live university view</span><button className="btn secondary" onClick={() => downloadCsv("vextra-placement-analytics.csv", exportRows)}><Download size={14} />Export CSV</button><button className="btn secondary" onClick={() => window.print()}>Print / PDF</button></div></div>
+    <div className="analytics-canvas-hero"><div><p className="eyebrow">{role === "data_analyst" ? "ANALYTICS WORKSPACE" : "PLACEMENT INTELLIGENCE"}</p><h2>Placement analytics</h2><p className="muted">A decision-ready view of targets, pipeline health, outcomes, and follow-through for {cycleName.toLowerCase()}.</p></div><div className="analytics-hero-actions"><div className="analytics-view-toggle" role="tablist" aria-label="Analytics view"><button type="button" className={viewMode === "canvas" ? "active" : ""} role="tab" aria-selected={viewMode === "canvas"} onClick={() => setViewMode("canvas")}><LayoutDashboard size={13} />Canvas</button><button type="button" className={viewMode === "query" ? "active" : ""} role="tab" aria-selected={viewMode === "query"} onClick={() => setViewMode("query")}><Sparkles size={13} />Ask analytics</button></div><span className="analytics-view-badge"><span className="status-dot" />Live university view</span><button className="btn secondary" onClick={() => downloadCsv("vextra-placement-analytics.csv", exportRows)}><Download size={14} />Export CSV</button><button className="btn secondary" onClick={() => window.print()}>Print / PDF</button></div></div>
+    {viewMode === "query" && <section className="panel analytics-query-panel" aria-labelledby="analytics-query-title"><div className="analytics-query-heading"><div><p className="eyebrow"><Sparkles size={12} /> ASK ANALYTICS</p><h3 id="analytics-query-title">Ask a question about this placement view</h3><p className="muted">Get a plain-language answer grounded in the current slicers, targets, pipeline, outcomes, and follow-up data.</p></div><span className="analytics-query-scope"><span className="status-dot" />{rows.length} records in this view</span></div><form className="analytics-query-form" onSubmit={(event) => { event.preventDefault(); askAnalytics(); }}><div className="analytics-query-input"><Sparkles size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="e.g. Which companies need attention before the next drive?" aria-label="Ask a question about analytics" /><button type="submit" className="btn primary" disabled={queryLoading || !query.trim()}>{queryLoading ? <><Loader2 size={14} className="spin" />Thinking…</> : <>Ask question <ArrowUpRight size={14} /></>}</button></div></form><div className="analytics-query-suggestions"><span>Try asking</span>{suggestedQuestions.map((question) => <button type="button" key={question} onClick={() => askAnalytics(question)}>{question}</button>)}</div>{queryLoading && <div className="analytics-query-loading" aria-label="Generating analytics answer"><span /><span /><span /></div>}{queryError && !queryLoading && <div className="analytics-query-error"><span>{queryError}</span><button type="button" className="text-btn" onClick={() => askAnalytics()}>Try again</button></div>}{queryResult && !queryLoading && !queryError && <div className="analytics-query-answer" aria-live="polite"><div className="analytics-query-answer-top"><span className="analytics-query-label"><Sparkles size={14} />{queryResult.provider === "groq" ? "AI answer" : "Rules-based answer"}</span><span className="muted">Based on {queryResult.scope?.records ?? rows.length} filtered records</span></div><p>{queryResult.answer}</p>{queryResult.references?.length > 0 && <div className="analytics-query-references"><span>References</span>{queryResult.references.map((reference) => <span className="analytics-query-reference" key={reference}>{reference}</span>)}</div>}<small>{queryResult.provider === "groq" ? `Generated with ${queryResult.model || "the configured AI model"}.` : "AI service unavailable, so this answer was generated locally from the same analytics data."} Answers are advisory; verify the underlying record before taking action.</small></div>}{!queryResult && !queryLoading && !queryError && <div className="analytics-query-empty"><Sparkles size={19} /><span>Ask about targets, risks, managers, industries, cities, pipeline stages, or outcomes.</span></div>}</section>}
     <div className="analytics-slicer-shell panel"><div className="analytics-slicer-head"><div><p className="eyebrow">GLOBAL SLICERS</p><h3>Choose the view you want to analyse</h3><span className="muted">Cycle controls the whole canvas. The remaining slicers refine every KPI, visual, alert, and record below.</span></div><div className="analytics-slicer-actions"><span className="count">{activeFilterCount} active</span><button type="button" className="text-btn" onClick={resetFilters} disabled={!activeFilterCount}>Reset all</button><button type="button" className="icon-btn analytics-filter-toggle" onClick={() => setFiltersOpen((current) => !current)} aria-expanded={filtersOpen} aria-controls="analytics-slicers">{filtersOpen ? "Hide filters" : "Show filters"}<ChevronRight size={15} className={filtersOpen ? "is-open" : ""} /></button></div></div>{filtersOpen && <div id="analytics-slicers" className="analytics-slicers"><label className="analytics-slicer primary"><span>Cycle / season</span><select value={cycleFilter} onChange={(event) => setCycle(event.target.value)}><option value="">All cycles</option>{seasons.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.academic_year}</option>)}</select></label><label className="analytics-slicer search-slicer"><span>Search records</span><div className="search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Company, manager, industry, city, action…" /></div></label><label className="analytics-slicer"><span>Manager</span><select value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)}><option value="">All managers</option>{managerOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>Category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>Industry</span><select value={industryFilter} onChange={(event) => setIndustryFilter(event.target.value)}><option value="">All industries</option>{industryOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>City</span><select value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}><option value="">All cities</option>{cityOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="analytics-slicer"><span>Pipeline stage</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All stages</option>{placementPipelineStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Outlook</span><select value={outlookFilter} onChange={(event) => setOutlookFilter(event.target.value)}><option value="">All outlooks</option>{placementOutlooks.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Drive status</span><select value={driveFilter} onChange={(event) => setDriveFilter(event.target.value)}><option value="">All drive statuses</option>{placementDriveStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Date focus</span><select value={dateFilter} onChange={(event) => setDateFilter(event.target.value)}><option value="">All dates</option><option value="next_30">Expected next 30 days</option><option value="overdue">Overdue follow-ups</option><option value="last_30">Contacted in last 30 days</option></select></label></div>}{activeFilterCount > 0 && <div className="analytics-filter-chips">{Object.entries(filterNames).filter(([, value]) => value).map(([key, value]) => <button type="button" className="analytics-filter-chip" key={key} onClick={() => removeFilter(key)}>{key === "cycle" ? "Cycle" : key === "date" ? "Date" : key === "focus" ? "Focus" : key[0].toUpperCase() + key.slice(1)}: {value}<X size={12} /></button>)}</div>}</div>
     <div className="analytics-context-line"><span><b>{rows.length}</b> of {allRows.length} placement records shown</span><span>Targets respect cycle, manager, and category filters</span><span>Updated {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
     <div className="report-stats analytics-stat-grid analytics-canvas-kpis">{kpis.map(([label, value, note]) => <div className="stat analytics-kpi" key={label}><span>{label}</span><strong>{value || 0}</strong><small>{note}</small></div>)}</div>

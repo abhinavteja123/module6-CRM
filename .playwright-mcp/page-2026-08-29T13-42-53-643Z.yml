@@ -1,0 +1,121 @@
+- generic [ref=e450]:
+  - complementary [ref=e451]:
+    - generic [ref=e452]:
+      - generic [ref=e453]: P
+      - generic [ref=e454]:
+        - strong [ref=e455]: VextraAI
+        - generic [ref=e456]: RELATIONSHIP OS
+    - generic [ref=e457]: WORKSPACE
+    - navigation [ref=e458]:
+      - button "Overview" [ref=e459] [cursor=pointer]
+      - button "Team" [ref=e466] [cursor=pointer]
+      - button "Direct Team" [ref=e473] [cursor=pointer]
+      - button "Placement Setup" [ref=e480] [cursor=pointer]
+      - button "Analytics" [ref=e485] [cursor=pointer]
+      - button "Contact Approvals" [ref=e492] [cursor=pointer]
+      - button "Organizations" [ref=e497] [cursor=pointer]
+      - button "Contacts" [ref=e503] [cursor=pointer]
+      - button "Meeting Reports" [ref=e510] [cursor=pointer]
+    - button "Sign out" [ref=e516] [cursor=pointer]
+  - main [ref=e520]:
+    - generic [ref=e521]:
+      - generic [ref=e522]:
+        - paragraph [ref=e523]: UNIVERSITY ADMIN
+        - heading "Overview" [level=1] [ref=e524]
+      - generic [ref=e525]:
+        - button "Open global search" [ref=e526] [cursor=pointer]:
+          - generic [ref=e530]: Search everything
+          - generic [ref=e531]: Ctrl K
+        - button "Open notifications" [ref=e533] [cursor=pointer]
+        - generic [ref=e537]:
+          - generic [ref=e538]: EV
+          - generic [ref=e539]:
+            - text: E2E Verification Admin
+            - generic [ref=e540]: university admin
+          - button "Change password" [ref=e541] [cursor=pointer]
+    - generic [ref=e546]:
+      - generic [ref=e547]:
+        - text: Change your initial password before using the workspace
+        - generic [ref=e548]:
+          - button "Retry" [ref=e549] [cursor=pointer]
+          - button "Dismiss error" [ref=e550] [cursor=pointer]
+      - generic [ref=e554]:
+        - generic [ref=e555]:
+          - text: Team members
+          - strong [ref=e556]: "0"
+          - text: Under your reporting line
+        - generic [ref=e557]:
+          - text: Organizations
+          - strong [ref=e558]: "0"
+          - text: University total
+        - generic [ref=e559]:
+          - text: Meeting reports
+          - strong [ref=e560]: "0"
+          - generic [ref=e561]: 0 pending actions
+        - generic [ref=e562]:
+          - text: Overdue follow-ups
+          - strong [ref=e563]: "0"
+          - generic [ref=e564]: 0 pipeline cards
+      - generic [ref=e565]:
+        - generic [ref=e566]:
+          - paragraph [ref=e567]: PLACEMENT PULSE
+          - heading "What is happening across the university" [level=3] [ref=e568]
+          - paragraph [ref=e569]: Live pipeline signals from coordinator and placement-manager updates.
+        - generic [ref=e570]:
+          - generic [ref=e571]:
+            - generic [ref=e572]: Companies in pipeline
+            - strong [ref=e573]: "0"
+          - generic [ref=e574]:
+            - generic [ref=e575]: Drives completed
+            - strong [ref=e576]: "0"
+          - generic [ref=e577]:
+            - generic [ref=e578]: Students placed
+            - strong [ref=e579]: "0"
+          - generic [ref=e580]:
+            - generic [ref=e581]: Needs attention
+            - strong [ref=e582]: "0"
+      - generic [ref=e583]:
+        - generic [ref=e584]:
+          - heading "Team activity" [level=3] [ref=e585]
+          - generic [ref=e586]: University-wide activity overview.
+        - region "Team activity table" [ref=e587]:
+          - table [ref=e588]:
+            - rowgroup [ref=e589]:
+              - row [ref=e590]:
+                - columnheader "Name" [ref=e591]
+                - columnheader "Role" [ref=e592]
+                - columnheader "Status" [ref=e593]
+                - columnheader "Organizations" [ref=e594]
+                - columnheader "Contacts" [ref=e595]
+                - columnheader "Reports" [ref=e596]
+                - columnheader "Last report" [ref=e597]
+                - columnheader "Follow-ups" [ref=e598]
+                - columnheader "Report tracking" [ref=e599]
+                - columnheader "Pipeline" [ref=e600]
+            - rowgroup
+      - generic [ref=e601]:
+        - generic [ref=e603]:
+          - paragraph [ref=e604]: WORKLOAD
+          - heading "Overdue follow-up queue" [level=3] [ref=e605]
+        - table [ref=e606]:
+          - rowgroup [ref=e607]:
+            - row [ref=e608]:
+              - columnheader "Team member" [ref=e609]
+              - columnheader "Pending" [ref=e610]
+              - columnheader "Overdue" [ref=e611]
+              - columnheader "Status" [ref=e612]
+          - rowgroup
+        - paragraph [ref=e614]: No overdue follow-ups.
+  - dialog [ref=e616]:
+    - heading "Change password" [level=3] [ref=e618]
+    - generic [ref=e619]:
+      - generic [ref=e620]:
+        - generic [ref=e621]: Current password
+        - textbox "Current password" [active] [ref=e622]
+      - generic [ref=e623]:
+        - generic [ref=e624]: New password
+        - textbox "New password" [ref=e625]
+      - generic [ref=e626]:
+        - generic [ref=e627]: Confirm new password
+        - textbox "Confirm new password" [ref=e628]
+      - button "Save" [ref=e631] [cursor=pointer]

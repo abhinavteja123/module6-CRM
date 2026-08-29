@@ -1,0 +1,19 @@
+- generic [ref=e433]:
+  - generic [ref=e434]:
+    - generic [ref=e435]: P
+    - generic [ref=e436]:
+      - strong [ref=e437]: VextraAI
+      - generic [ref=e438]: RELATIONSHIP OS
+  - heading "Welcome back" [level=1] [ref=e439]
+  - paragraph [ref=e440]: Sign in to your placement workspace.
+  - generic [ref=e441]:
+    - generic [ref=e442]:
+      - generic [ref=e443]: Email
+      - textbox "Email" [ref=e444]:
+        - /placeholder: name@example.com
+    - generic [ref=e445]:
+      - generic [ref=e446]: Password
+      - textbox "Password" [ref=e447]:
+        - /placeholder: Enter your password
+    - button "Sign in" [ref=e448] [cursor=pointer]
+    - button "Request password change" [ref=e449] [cursor=pointer]

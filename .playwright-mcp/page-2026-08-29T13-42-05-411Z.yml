@@ -1,0 +1,88 @@
+- generic [ref=e22]:
+  - complementary [ref=e23]:
+    - generic [ref=e24]:
+      - generic [ref=e25]: P
+      - generic [ref=e26]:
+        - strong [ref=e27]: VextraAI
+        - generic [ref=e28]: RELATIONSHIP OS
+    - generic [ref=e29]: WORKSPACE
+    - navigation [ref=e30]:
+      - button "Overview" [ref=e31] [cursor=pointer]
+      - button "Universities" [ref=e38] [cursor=pointer]
+      - button "Users" [active] [ref=e44] [cursor=pointer]
+    - button "Sign out" [ref=e52] [cursor=pointer]
+  - main [ref=e56]:
+    - generic [ref=e57]:
+      - generic [ref=e58]:
+        - paragraph [ref=e59]: VEXTRA AI ADMIN
+        - heading "Users" [level=1] [ref=e348]
+      - generic [ref=e61]:
+        - button "Open global search" [ref=e62] [cursor=pointer]:
+          - generic [ref=e66]: Search everything
+          - generic [ref=e67]: Ctrl K
+        - button "Open notifications" [ref=e69] [cursor=pointer]
+        - generic [ref=e73]:
+          - generic [ref=e74]: VA
+          - generic [ref=e75]:
+            - text: Vextra AI Admin
+            - generic [ref=e76]: super admin
+          - button "Change password" [ref=e77] [cursor=pointer]
+    - generic [ref=e82]:
+      - generic [ref=e83]:
+        - text: Updated 07:11 PM
+        - button "Refresh" [ref=e87] [cursor=pointer]
+      - generic [ref=e349]:
+        - generic [ref=e350]:
+          - paragraph [ref=e351]: ACCESS DIRECTORY
+          - heading "All accounts" [level=2] [ref=e352]
+          - paragraph [ref=e353]: Manage access within your authorized scope.
+        - button "Add account" [ref=e354] [cursor=pointer]
+      - generic [ref=e356]:
+        - textbox "Search all accounts" [ref=e361]:
+          - /placeholder: Search all accounts by name or email
+        - combobox "Filter by university" [ref=e362] [cursor=pointer]:
+          - option "All universities" [selected]
+          - option "Gitam University"
+          - option "SRM University"
+        - combobox "Filter by role" [ref=e363] [cursor=pointer]:
+          - option "All roles" [selected]
+          - option "university admin"
+          - option "coordinator"
+          - option "placement manager"
+          - option "data analyst"
+        - combobox "Filter by account status" [ref=e364] [cursor=pointer]:
+          - option "All statuses" [selected]
+          - option "Active"
+          - option "Inactive"
+        - combobox "Filter by last login" [ref=e365] [cursor=pointer]:
+          - option "Any login state" [selected]
+          - option "Never logged in"
+          - option "Has logged in"
+        - button "Export CSV" [ref=e366] [cursor=pointer]
+      - generic [ref=e370]:
+        - generic [ref=e371]:
+          - generic [ref=e372]:
+            - generic [ref=e373]:
+              - paragraph [ref=e374]: UNIVERSITY ADMIN
+              - button [ref=e375] [cursor=pointer]:
+                - heading "Registrar" [level=3] [ref=e376]
+                - paragraph [ref=e377]: registrar@gitam.edu.in
+            - generic [ref=e378]:
+              - generic [ref=e379]: active
+              - button "Deactivate" [ref=e381] [cursor=pointer]
+          - generic [ref=e382]:
+            - generic [ref=e383]: 4 team accounts
+            - button "View accounts" [ref=e384] [cursor=pointer]
+        - generic [ref=e385]:
+          - generic [ref=e386]:
+            - generic [ref=e387]:
+              - paragraph [ref=e388]: UNIVERSITY ADMIN
+              - button [ref=e389] [cursor=pointer]:
+                - heading "SRM Head" [level=3] [ref=e390]
+                - paragraph [ref=e391]: srm@gmail.com
+            - generic [ref=e392]:
+              - generic [ref=e393]: active
+              - button "Deactivate" [ref=e395] [cursor=pointer]
+          - generic [ref=e396]:
+            - generic [ref=e397]: 4 team accounts
+            - button "View accounts" [ref=e398] [cursor=pointer]
