@@ -1,0 +1,18 @@
+[      85ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SVG7M4VJ.js?v=898094b9:21606
+[    8371ms] [ERROR] Warning: React does not recognize the `%s` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `%s` instead. If you accidentally passed it from a parent component, remove it from the DOM element.%s defaultOpen defaultopen 
+    at details
+    at AnalyticsCanvasSection (http://127.0.0.1:5173/src/main.jsx?t=1788004395982:8967:35)
+    at div
+    at PlacementAnalyticsCanvas (http://127.0.0.1:5173/src/main.jsx?t=1788004395982:9013:37)
+    at section
+    at main
+    at div
+    at Workspace (http://127.0.0.1:5173/src/main.jsx?t=1788004395982:713:22)
+    at App (http://127.0.0.1:5173/src/main.jsx?t=1788004395982:624:27)
+    at Router (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=898094b9:7541:13)
+    at BrowserRouter (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=898094b9:10857:3) @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SVG7M4VJ.js?v=898094b9:518
+[   22104ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8000/api/meeting-reports:0
+[   22112ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8000/api/organizations:0
+[   22112ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8000/api/contacts:0
+[   22112ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8000/api/team/overview:0
+[   22158ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:5173/@vite/client:963

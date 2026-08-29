@@ -170,6 +170,21 @@ def fail_if_category_migration_pending(error: Exception):
     raise error
 
 
+def industry_migration_pending(error: Exception) -> bool:
+    message = str(error).lower()
+    return "placement_industries" in message and ("schema cache" in message or "could not find" in message or "relation" in message or "column" in message)
+
+
+def fail_if_industry_migration_pending(error: Exception):
+    if industry_migration_pending(error):
+        fail(
+            "Industry classification is not enabled in the database yet. Apply the latest Supabase migration, then retry.",
+            503,
+            {"code": "industry_migration_required", "message": "Apply supabase/migrations/20260829000021_admin_managed_industries.sql"},
+        )
+    raise error
+
+
 def record_audit(
     actor: dict[str, Any] | None,
     action: str,
@@ -616,7 +631,8 @@ class OrganizationIn(BaseModel):
     name: str = Field(min_length=1)
     category_id: str = Field(min_length=1)
     expected_ctc: str | None = Field(default=None, min_length=1)
-    industry: str = Field(min_length=1)
+    industry_id: str = Field(min_length=1)
+    industry: str | None = Field(default=None, min_length=1)
     website: str = Field(min_length=1)
     city: str = Field(min_length=1)
     status: Literal["prospect", "active", "inactive"]
@@ -627,6 +643,7 @@ class OrganizationUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     category_id: str | None = Field(default=None, min_length=1)
     expected_ctc: str | None = Field(default=None, min_length=1)
+    industry_id: str | None = Field(default=None, min_length=1)
     industry: str | None = Field(default=None, min_length=1)
     website: str | None = Field(default=None, min_length=1)
     city: str | None = Field(default=None, min_length=1)
@@ -772,6 +789,11 @@ class CategoryIn(BaseModel):
 
 class CityIn(BaseModel):
     city: str = Field(min_length=1)
+
+
+class IndustryIn(BaseModel):
+    name: str = Field(min_length=1)
+    description: str | None = Field(default=None, min_length=1)
 
 
 class CityBulkIn(BaseModel):
@@ -1029,7 +1051,14 @@ def create_organization(payload: OrganizationIn, user=Depends(require_roles("pla
     category = university_rows("company_categories", user).eq("id", payload.category_id).limit(1).execute().data or []
     if not category:
         fail("Choose a company category configured by your University Admin", 400)
+    try:
+        industry = university_rows("placement_industries", user).eq("id", payload.industry_id).limit(1).execute().data or []
+    except Exception as error:
+        fail_if_industry_migration_pending(error)
+    if not industry:
+        fail("Choose an industry configured by your University Admin", 400)
     data = payload.model_dump()
+    data["industry"] = industry[0]["name"]
     data.update({"placement_manager_id": user["id"], "university_id": user.get("university_id")})
     try:
         created = db.table("organizations").insert(data).execute().data[0]
@@ -1047,6 +1076,16 @@ def update_organization(item_id: str, payload: OrganizationUpdateIn, user=Depend
     updates = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if value is not None}
     if "category_id" in updates and not university_rows("company_categories", user).eq("id", updates["category_id"]).limit(1).execute().data:
         fail("Choose a company category configured by your University Admin", 400)
+    if "industry" in updates and "industry_id" not in updates:
+        fail("Choose an industry from the University Admin list", 400)
+    if "industry_id" in updates:
+        try:
+            industry = university_rows("placement_industries", user).eq("id", updates["industry_id"]).limit(1).execute().data or []
+        except Exception as error:
+            fail_if_industry_migration_pending(error)
+        if not industry:
+            fail("Choose an industry configured by your University Admin", 400)
+        updates["industry"] = industry[0]["name"]
     if not updates:
         fail("No organization changes supplied")
     try:
@@ -1828,6 +1867,39 @@ def update_category(category_id: str, payload: CategoryIn, user=Depends(require_
     return result[0]
 
 
+@app.get("/api/placement/industries")
+def list_industries(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return university_rows("placement_industries", user).order("name").execute().data or []
+
+
+@app.post("/api/placement/industries", status_code=201)
+def create_industry(payload: IndustryIn, user=Depends(require_roles("university_admin"))):
+    name = " ".join(payload.name.strip().split())
+    if not name:
+        fail("Industry name cannot be blank", 400)
+    existing = university_rows("placement_industries", user).execute().data or []
+    if any(str(item.get("name", "")).strip().casefold() == name.casefold() for item in existing):
+        fail("This industry is already configured", 409)
+    created = db.table("placement_industries").insert({**payload.model_dump(exclude={"name"}), "name": name, "university_id": user["university_id"], "created_by": user["id"]}).execute().data[0]
+    record_audit(user, "created", "placement_industry", created["id"], user["university_id"], {"name": created["name"]})
+    return created
+
+
+@app.patch("/api/placement/industries/{industry_id}")
+def update_industry(industry_id: str, payload: IndustryIn, user=Depends(require_roles("university_admin"))):
+    name = " ".join(payload.name.strip().split())
+    if not name:
+        fail("Industry name cannot be blank", 400)
+    existing = university_rows("placement_industries", user).execute().data or []
+    if any(str(item.get("id")) != str(industry_id) and str(item.get("name", "")).strip().casefold() == name.casefold() for item in existing):
+        fail("This industry is already configured", 409)
+    result = db.table("placement_industries").update({"name": name, "description": payload.description, "updated_at": now().isoformat()}).eq("id", industry_id).eq("university_id", user["university_id"]).execute().data or []
+    if not result:
+        fail("Industry not found", 404)
+    record_audit(user, "updated", "placement_industry", industry_id, user["university_id"], {"name": name})
+    return result[0]
+
+
 @app.get("/api/placement/cities")
 def list_cities(user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
     return university_rows("university_cities", user).eq("is_active", True).order("city").execute().data or []
@@ -1985,7 +2057,7 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     org_ids = list({str(row.get("organization_id")) for row in rows if row.get("organization_id")})
     if org_ids:
         try:
-            org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id,category_id").in_("id", org_ids).execute().data or []
+            org_rows = db.table("organizations").select("id,name,city,industry,industry_id,status,placement_manager_id,category_id").in_("id", org_ids).execute().data or []
         except Exception:
             # Keep analytics readable while an older deployment is waiting for the category migration.
             org_rows = db.table("organizations").select("id,name,city,industry,status,placement_manager_id").in_("id", org_ids).execute().data or []
@@ -1996,6 +2068,12 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     names = {str(person["id"]): person["full_name"] for person in people}
     category_rows = university_rows("company_categories", user).execute().data or []
     category_names = {str(item["id"]): item.get("name") for item in category_rows}
+    try:
+        industry_rows = university_rows("placement_industries", user).execute().data or []
+    except Exception:
+        # Keep analytics readable until the additive industry migration is deployed.
+        industry_rows = []
+    industry_names = {str(item["id"]): item.get("name") for item in industry_rows}
     seasons = university_rows("placement_seasons", user).execute().data or []
     season_names = {str(item["id"]): item.get("name") or item.get("academic_year") for item in seasons}
     can_see_company = user.get("role") in {"university_admin", "placement_manager", "data_analyst"} or has_full_crm_access(user)
@@ -2010,7 +2088,8 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
             "category_id": category_id,
             "organization_name": org.get("name") if can_see_company else "Organization activity",
             "city": org.get("city") if can_see_company else None,
-            "industry": org.get("industry") if can_see_company else None,
+            "industry_id": org.get("industry_id") if can_see_company else None,
+            "industry": (industry_names.get(str(org.get("industry_id"))) or org.get("industry")) if can_see_company else None,
             "organization_status": org.get("status"),
             "notes": row.get("notes") if can_see_pipeline_text else None,
             "next_action": row.get("next_action") if can_see_pipeline_text else None,

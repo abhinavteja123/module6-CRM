@@ -91,20 +91,45 @@ def ensure_seasons(university_id: str, admin_id: str) -> list[dict]:
     return sorted(seasons, key=lambda item: str(item.get("start_date", "")))
 
 
-def ensure_organizations(university_id: str, managers: list[dict], categories: list[dict]) -> list[dict]:
+def ensure_industries(university_id: str, admin_id: str) -> list[dict]:
+    industries = [item for item in get_rows("placement_industries") if str(item.get("university_id")) == university_id]
+    additions = [
+        ("Technology Services", "Software, IT services, and technology consulting."),
+        ("Consulting", "Business, strategy, and professional consulting."),
+        ("Financial Services", "Banking, insurance, fintech, and financial operations."),
+        ("Engineering and Manufacturing", "Engineering, industrial, automotive, and manufacturing employers."),
+        ("Consumer Technology", "Consumer internet, e-commerce, and digital products."),
+        ("Healthcare", "Healthcare, life sciences, and medical technology."),
+    ]
+    existing_names = {str(item.get("name", "")).strip().casefold() for item in industries}
+    for name, description in additions:
+        if name.casefold() in existing_names:
+            continue
+        inserted = db.table("placement_industries").insert({
+            "university_id": university_id,
+            "name": name,
+            "description": description,
+            "created_by": admin_id,
+        }).execute().data or []
+        industries.extend(inserted)
+        existing_names.add(name.casefold())
+    return sorted(industries, key=lambda item: str(item.get("name", "")))
+
+
+def ensure_organizations(university_id: str, managers: list[dict], categories: list[dict], industries: list[dict]) -> list[dict]:
     specs = [
         ("Accenture", "Technology Services", "Bengaluru", "active"),
-        ("Wipro", "IT Services", "Hyderabad", "active"),
+        ("Wipro", "Technology Services", "Hyderabad", "active"),
         ("Deloitte", "Consulting", "Pune", "prospect"),
         ("Cognizant", "Technology Services", "Chennai", "active"),
         ("Amazon", "E-commerce", "Bengaluru", "active"),
         ("Microsoft", "Cloud and Software", "Hyderabad", "active"),
-        ("L&T Technology Services", "Engineering Services", "Mumbai", "prospect"),
-        ("Tata Motors", "Automotive", "Pune", "active"),
+        ("L&T Technology Services", "Engineering and Manufacturing", "Mumbai", "prospect"),
+        ("Tata Motors", "Engineering and Manufacturing", "Pune", "active"),
         ("Zomato", "Consumer Technology", "Gurugram", "prospect"),
         ("HDFC Bank", "Financial Services", "Mumbai", "active"),
         ("ServiceNow", "Enterprise Software", "Noida", "active"),
-        ("Bosch", "Automotive Technology", "Chennai", "inactive"),
+        ("Bosch", "Engineering and Manufacturing", "Chennai", "inactive"),
     ]
     existing = [item for item in get_rows("organizations") if str(item.get("university_id")) == university_id]
     seeded = [item for item in existing if SEED_MARKER in str(item.get("notes", ""))]
@@ -115,7 +140,8 @@ def ensure_organizations(university_id: str, managers: list[dict], categories: l
             continue
         manager_id = str(managers[index % len(managers)]["id"])
         category_id = categories[index % len(categories)]["id"] if categories else None
-        inserted = db.table("organizations").insert({
+        industry_id = next((item["id"] for item in industries if str(item.get("name", "")).casefold() == industry.casefold()), None)
+        organization_payload = {
             "university_id": university_id,
             "placement_manager_id": manager_id,
             "name": name,
@@ -126,9 +152,18 @@ def ensure_organizations(university_id: str, managers: list[dict], categories: l
             "city": city,
             "status": status,
             "notes": f"{SEED_MARKER}: analytics scenario {index + 1}",
-        }).execute().data or []
+        }
+        if industry_id:
+            organization_payload["industry_id"] = industry_id
+        inserted = db.table("organizations").insert(organization_payload).execute().data or []
         if inserted:
             by_name[key] = inserted[0]
+    for organization in by_name.values():
+        industry_id = next((item["id"] for item in industries if str(item.get("name", "")).casefold() == str(organization.get("industry", "")).casefold()), None)
+        if industry_id and not organization.get("industry_id"):
+            updated = db.table("organizations").update({"industry_id": industry_id}).eq("id", organization["id"]).execute().data or []
+            if updated:
+                organization.update(updated[0])
     return list(by_name.values())
 
 
@@ -295,7 +330,14 @@ def main() -> None:
     admin_id = str(admins[0]["id"])
     categories = ensure_categories(university_id, admin_id)
     seasons = ensure_seasons(university_id, admin_id)
-    organizations = ensure_organizations(university_id, managers, categories)
+    try:
+        industries = ensure_industries(university_id, admin_id)
+    except Exception as error:
+        if "placement_industries" not in str(error):
+            raise
+        print("Industry catalog migration is not applied yet; continuing with the existing analytics seed.")
+        industries = []
+    organizations = ensure_organizations(university_id, managers, categories, industries)
     targets_created = ensure_targets(university_id, admin_id, seasons, categories, managers)
     metrics_created = ensure_metrics(university_id, seasons, categories, organizations)
     contacts_created, reports_created, actions_created = ensure_contacts_and_reports(university_id, organizations, managers)
@@ -303,6 +345,7 @@ def main() -> None:
         "university": university.get("name"),
         "seasons_available": len(seasons),
         "categories_available": len(categories),
+        "industries_available": len(industries),
         "seed_organizations": len(organizations),
         "targets_created": targets_created,
         "metrics_created": metrics_created,

@@ -455,7 +455,7 @@ function Workspace({ role, user, profile, onLogout }) {
     [editingStage, setEditingStage] = useState(null),
     [editingUser, setEditingUser] = useState(null),
     [editingUniversity, setEditingUniversity] = useState(null),
-    [placementData, setPlacementData] = useState({ seasons: [], categories: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, contactApprovals: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
+    [placementData, setPlacementData] = useState({ seasons: [], categories: [], industries: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, contactApprovals: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
     [loaded, setLoaded] = useState(false);
   const mode = "company";
   const copy = workspaceCopy.company;
@@ -467,11 +467,12 @@ function Workspace({ role, user, profile, onLogout }) {
   const visibleReports = reports;
   const visibleCards = cards;
   const loadPlacementData = async () => {
-    const [analytics, metrics, seasons, categories, cities, assignments, targets, contactApprovals, access, settings] = await Promise.all([
+    const [analytics, metrics, seasons, categories, industries, cities, assignments, targets, contactApprovals, access, settings] = await Promise.all([
       analyticsViewer ? apiFetch("/api/placement/analytics") : Promise.resolve(null),
       apiFetch("/api/placement/metrics"),
       apiFetch("/api/placement/seasons"),
       apiFetch("/api/placement/categories"),
+      apiFetch("/api/placement/industries").catch(() => []),
       apiFetch("/api/placement/cities"),
       apiFetch("/api/placement/assignments"),
       apiFetch("/api/placement/targets"),
@@ -485,6 +486,7 @@ function Workspace({ role, user, profile, onLogout }) {
       metrics: metrics || [],
       seasons: seasons || [],
       categories: categories || [],
+      industries: industries || [],
       cities: cities || [],
       assignments: assignments || [],
       targets: targets || [],
@@ -669,7 +671,7 @@ function Workspace({ role, user, profile, onLogout }) {
       name: f.get("name"),
       category_id: f.get("category_id"),
       expected_ctc: f.get("expected_ctc"),
-      industry: f.get("industry"),
+      industry_id: f.get("industry_id"),
       city: f.get("city"),
       website: f.get("website"),
       status: f.get("status"),
@@ -1138,11 +1140,11 @@ function Workspace({ role, user, profile, onLogout }) {
     ) : universityAdmin && active === "Direct Team" ? (
       <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} directReportsTo={user?.id} onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} onEdit={(member) => { setEditingUser(member); setModal("edit-user"); }} hierarchy={false} />
     ) : active === "Placement Setup" ? (
-      <PlacementSetupWizard data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+      <PlacementSetupWizardV2 data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : universityAdmin && active === "Targets" ? (
       <TargetEntryPanel data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : active === "Analytics" && analyticsViewer ? (
-      <>{role !== "data_analyst" && <TargetProgressPanel data={placementData} users={teamSummary?.users || [...managers, profile].filter(Boolean)} />}<CategoryReference categories={placementData.categories} /><PlacementCategorySummary analytics={placementData.analytics} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
+      <><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
     ) : supervisor && (active === "Placement Tracker" || active === "Placement Progress" || active === "Placement Updates" || active === "Placement Metrics") ? (
       <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} canEdit={supervisor} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} /></>
     ) : universityAdmin && active === "Contact Approvals" ? (
@@ -1321,12 +1323,15 @@ function Workspace({ role, user, profile, onLogout }) {
               placeholder={copy.organizationPlaceholder}
             />
             <div className="form-grid">
-              <Field
-                label={copy.focus}
-                name="industry"
-                defaultValue={editingOrg?.industry || ""}
-                placeholder={copy.focusPlaceholder}
-              />
+              <Select
+                label="Industry"
+                name="industry_id"
+                defaultValue={editingOrg?.industry_id || ""}
+              >
+                <option value="">Choose an industry set by your University Admin</option>
+                {editingOrg?.industry && !editingOrg?.industry_id && <option value="">{editingOrg.industry} (legacy — choose a catalog value)</option>}
+                {(placementData.industries || []).map((industry) => <option key={industry.id} value={industry.id}>{industry.name}</option>)}
+              </Select>
               <Select label="City" name="city" defaultValue={editingOrg?.city || ""}>
                 <option value="">Choose an allowed city</option>
                 {editingOrg?.city && !(placementData.cities || []).some((item) => item.city === editingOrg.city) && <option value={editingOrg.city}>{editingOrg.city} (current)</option>}
@@ -2620,6 +2625,131 @@ function PlacementNlpInsights({ seasonId }) {
   return <div className="panel nlp-insights-panel"><div className="panel-head"><div><p className="eyebrow"><Sparkles size={12} /> DASHBOARD NLP</p><h3>Placement signals and recommended follow-ups</h3><span className="muted">Read-only summary of pipeline health, notes, risks, and next actions for the current placement portfolio.</span></div><div className="nlp-panel-actions">{result && <span className={`nlp-provider ${result.provider}`}>{providerLabel}</span>}<button type="button" className="btn secondary" onClick={loadInsights} disabled={loading}><RefreshCw size={13} />{loading ? "Analyzing…" : "Refresh insights"}</button></div></div>{loading ? <div className="nlp-loading" aria-label="Loading dashboard insights"><span /><span /><span /></div> : error ? <div className="nlp-error"><span>{error}</span><button type="button" className="text-btn" onClick={loadInsights}>Try again</button></div> : <><div className="nlp-summary"><Sparkles size={16} /><p>{result?.summary || "No narrative summary is available yet."}</p></div><div className="nlp-insight-grid">{(result?.insights || []).map((insight, index) => <article className={`nlp-insight ${insight.severity || "info"}`} key={`${insight.title}-${index}`}><div className="nlp-insight-top"><span className="nlp-insight-type">{insight.type || "status"}</span><span className="nlp-insight-severity">{insight.severity || "info"}</span></div><h4>{insight.title}</h4><p>{insight.detail}</p>{insight.company_labels?.length > 0 && <div className="nlp-company-list">{insight.company_labels.map((company) => <span key={company}>{company}</span>)}</div>}{insight.recommended_action && <div className="nlp-action"><b>Recommended next step</b><span>{insight.recommended_action}</span></div>}</article>)}</div><small className="nlp-disclaimer">{result?.provider === "groq" ? `Generated with ${result.model || "Groq"} from redacted CRM context.` : "Generated locally from placement stages, dates, outcomes, and follow-up signals."} Insights are advisory; coordinators and placement managers remain responsible for verifying the underlying record.</small></>}</div>;
 }
 
+function AnalyticsCanvasSection({ eyebrow, title, description, children, defaultOpen = true, className = "" }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return <details className={`analytics-canvas-section panel ${className}`} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary>
+      <div><p className="eyebrow">{eyebrow}</p><h3>{title}</h3>{description && <span className="muted">{description}</span>}</div>
+      <ChevronRight size={18} aria-hidden="true" />
+    </summary>
+    <div className="analytics-canvas-section-body">{children}</div>
+  </details>;
+}
+
+function PlacementAnalyticsCanvas({ analytics, data = {}, role }) {
+  const [cycleFilter, setCycleFilter] = useState(() => localStorage.getItem("placement-season-filter") || "");
+  const [managerFilter, setManagerFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [industryFilter, setIndustryFilter] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [outlookFilter, setOutlookFilter] = useState("");
+  const [driveFilter, setDriveFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+  const [focusFilter, setFocusFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const allRows = analytics?.rows || [];
+  const seasons = data.seasons || [];
+  const targets = data.targets || [];
+  const categories = data.categories || [];
+  const industries = data.industries || [];
+  const today = new Date().toISOString().slice(0, 10);
+  const inNext30Days = (value) => value && today <= value && value <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+  const managerOptions = [...new Map(allRows.filter((row) => row.placement_manager_id).map((row) => [String(row.placement_manager_id), { id: row.placement_manager_id, name: row.placement_manager_name || "Placement manager" }])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const categoryOptions = [...new Map([...categories.map((item) => [String(item.id), { id: item.id, name: item.name }]), ...allRows.filter((row) => row.category_id).map((row) => [String(row.category_id), { id: row.category_id, name: row.category_name || "Category" }])]).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const cityOptions = [...new Set(allRows.map((row) => row.city).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const industryOptions = [...new Map([...industries.map((item) => [String(item.id), { id: item.id, name: item.name }]), ...allRows.filter((row) => row.industry).map((row) => [String(row.industry_id || row.industry), { id: row.industry_id || row.industry, name: row.industry }])]).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const matchesDate = (row) => {
+    if (dateFilter === "next_30") return inNext30Days(row.expected_date);
+    if (dateFilter === "overdue") return row.next_follow_up_date && row.next_follow_up_date < today && row.pipeline_status !== "cancelled";
+    if (dateFilter === "last_30") return row.last_contact_date && row.last_contact_date >= new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    return true;
+  };
+  const rowMatches = (row) => {
+    const text = `${row.organization_name || ""} ${row.city || ""} ${row.industry || ""} ${row.placement_manager_name || ""} ${row.category_name || ""} ${row.next_action || ""}`.toLowerCase();
+    if (cycleFilter && String(row.season_id) !== String(cycleFilter)) return false;
+    if (managerFilter && String(row.placement_manager_id) !== String(managerFilter)) return false;
+    if (categoryFilter && String(row.category_id || "") !== String(categoryFilter)) return false;
+    if (industryFilter && String(row.industry_id || row.industry || "") !== String(industryFilter)) return false;
+    if (cityFilter && String(row.city || "") !== String(cityFilter)) return false;
+    if (statusFilter && String(row.pipeline_status || "prospect") !== String(statusFilter)) return false;
+    if (outlookFilter && String(row.outlook || "neutral") !== String(outlookFilter)) return false;
+    if (driveFilter && String(row.drive_status || "not_scheduled") !== String(driveFilter)) return false;
+    if (!matchesDate(row)) return false;
+    if (focusFilter === "missing_action" && (row.next_action || row.notes)) return false;
+    if (focusFilter === "stalled" && row.pipeline_status !== "on_hold") return false;
+    return !search.trim() || text.includes(search.trim().toLowerCase());
+  };
+  const rows = allRows.filter(rowMatches);
+  const filteredTargets = targets.filter((row) => (!cycleFilter || String(row.season_id) === String(cycleFilter)) && (!managerFilter || String(row.user_id) === String(managerFilter)) && (!categoryFilter || String(row.category_id || "") === String(categoryFilter)));
+  const metricKeys = ["companies_acquired", "drives_conducted", "offers_received", "students_placed", "students_joined"];
+  const targetKeys = ["companies_target", "drives_target", "offers_target", "students_placed_target", "students_joined_target"];
+  const totals = Object.fromEntries(metricKeys.map((key) => [key, rows.reduce((sum, row) => sum + Number(row[key] || 0), 0)]));
+  const targetTotals = Object.fromEntries(targetKeys.map((key) => [key, filteredTargets.reduce((sum, row) => sum + Number(row[key] || 0), 0)]));
+  const statusCounts = Object.fromEntries(placementPipelineStatuses.map(([key]) => [key, rows.filter((row) => (row.pipeline_status || "prospect") === key).length]));
+  const outlookCounts = Object.fromEntries(placementOutlooks.map(([key]) => [key, rows.filter((row) => (row.outlook || "neutral") === key).length]));
+  const driveCounts = Object.fromEntries(placementDriveStatuses.map(([key]) => [key, rows.filter((row) => (row.drive_status || "not_scheduled") === key).length]));
+  const conversionRate = (from, to) => totals[from] ? Math.round((totals[to] / totals[from]) * 100) : 0;
+  const progress = targetTotals.companies_target ? Math.min(100, Math.round((totals.companies_acquired / targetTotals.companies_target) * 100)) : 0;
+  const summary = {
+    active: rows.filter((row) => !["cancelled", "joined", "placed"].includes(row.pipeline_status)).length,
+    overdue: rows.filter((row) => row.next_follow_up_date && row.next_follow_up_date < today && row.pipeline_status !== "cancelled").length,
+    upcoming: rows.filter((row) => inNext30Days(row.expected_date) && row.pipeline_status !== "cancelled").length,
+    negative: rows.filter((row) => row.outlook === "negative").length,
+    missingAction: rows.filter((row) => !row.next_action && !row.notes && !["joined", "cancelled"].includes(row.pipeline_status)).length,
+    stalled: rows.filter((row) => row.pipeline_status === "on_hold").length,
+  };
+  const activeFilterCount = [cycleFilter, managerFilter, categoryFilter, industryFilter, cityFilter, statusFilter, outlookFilter, driveFilter, dateFilter, focusFilter, search.trim()].filter(Boolean).length;
+  const cycleName = seasons.find((item) => String(item.id) === String(cycleFilter))?.name || "All cycles";
+  const labelFor = (options, value) => options.find(([key]) => key === value)?.[1] || value;
+  const statusClass = (value) => String(value || "").replaceAll("_", "-");
+  const filterNames = { cycle: cycleFilter ? cycleName : "", manager: managerOptions.find((item) => String(item.id) === String(managerFilter))?.name, category: categoryOptions.find((item) => String(item.id) === String(categoryFilter))?.name, industry: industryOptions.find((item) => String(item.id) === String(industryFilter))?.name || industryFilter, city: cityFilter, status: labelFor(placementPipelineStatuses, statusFilter), outlook: labelFor(placementOutlooks, outlookFilter), drive: labelFor(placementDriveStatuses, driveFilter), date: dateFilter === "next_30" ? "Expected next 30 days" : dateFilter === "overdue" ? "Overdue follow-ups" : dateFilter === "last_30" ? "Contacted in last 30 days" : "", focus: focusFilter === "missing_action" ? "Missing next action" : focusFilter === "stalled" ? "On hold" : "", search: search.trim() };
+  const resetFilters = () => { setCycleFilter(""); setManagerFilter(""); setCategoryFilter(""); setIndustryFilter(""); setCityFilter(""); setStatusFilter(""); setOutlookFilter(""); setDriveFilter(""); setDateFilter(""); setFocusFilter(""); setSearch(""); localStorage.removeItem("placement-season-filter"); };
+  const removeFilter = (key) => ({ cycle: () => setCycleFilter(""), manager: () => setManagerFilter(""), category: () => setCategoryFilter(""), industry: () => setIndustryFilter(""), city: () => setCityFilter(""), status: () => setStatusFilter(""), outlook: () => setOutlookFilter(""), drive: () => setDriveFilter(""), date: () => setDateFilter(""), focus: () => setFocusFilter(""), search: () => setSearch("") }[key]?.());
+  const setCycle = (value) => { setCycleFilter(value); if (value) localStorage.setItem("placement-season-filter", value); else localStorage.removeItem("placement-season-filter"); };
+  useEffect(() => {
+    if (cycleFilter && seasons.length && !seasons.some((season) => String(season.id) === String(cycleFilter))) setCycle("");
+  }, [seasons, cycleFilter]);
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("placement-season-filter-change", { detail: cycleFilter }));
+  }, [cycleFilter]);
+  const aggregate = (key, labelKey) => {
+    const map = new Map();
+    rows.forEach((row) => {
+      const id = String(row[key] || "unspecified");
+      const item = map.get(id) || { id, label: row[labelKey] || "Unspecified", companies_acquired: 0, drives_conducted: 0, offers_received: 0, students_placed: 0, students_joined: 0 };
+      metricKeys.forEach((metric) => { item[metric] += Number(row[metric] || 0); });
+      map.set(id, item);
+    });
+    return [...map.values()].sort((a, b) => b.students_placed - a.students_placed);
+  };
+  const managerRows = aggregate("placement_manager_id", "placement_manager_name");
+  const categoryRows = aggregate("category_id", "category_name");
+  const cityRows = aggregate("city", "city");
+  const industryRows = aggregate("industry", "industry");
+  const funnel = [["students_registered", "Registered", rows.reduce((sum, row) => sum + Number(row.students_registered || 0), 0)], ["students_selected", "Selected", rows.reduce((sum, row) => sum + Number(row.students_selected || 0), 0)], ["offers_received", "Offers", totals.offers_received], ["students_placed", "Placed", totals.students_placed], ["students_joined", "Joined", totals.students_joined]];
+  const maxStage = Math.max(1, ...funnel.map(([, , value]) => value));
+  const toggleRow = (id) => setExpandedRows((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const exportRows = [["Company", "Manager", "Cycle", "Category", "Industry", "Pipeline stage", "Outlook", "Expected date", "Drive status", "Registered", "Selected", "Offers", "Placed", "Joined", "Follow-up", "Next action"], ...rows.map((row) => [row.organization_name, row.placement_manager_name, row.season_name, row.category_name, row.industry, row.pipeline_status_label, row.outlook_label, row.expected_date, row.drive_status_label, row.students_registered, row.students_selected, row.offers_received, row.students_placed, row.students_joined, row.next_follow_up_date, row.next_action])];
+  const kpis = [["Companies acquired", totals.companies_acquired, `${progress}% of target`], ["Company target", targetTotals.companies_target, `${progress}% acquired`], ["Drives completed", totals.drives_conducted, `${driveCounts.completed || 0} completed`], ["Offers received", totals.offers_received, `${conversionRate("students_selected", "offers_received")}% of selected`], ["Students placed", totals.students_placed, `${conversionRate("offers_received", "students_placed")}% of offers`], ["Students joined", totals.students_joined, `${conversionRate("students_placed", "students_joined")}% of placed`], ["Active pipeline", summary.active, `${rows.length} tracked records`], ["Needs attention", summary.overdue + summary.negative, `${summary.overdue} overdue · ${summary.negative} negative`]];
+  return <div className="dashboard analytics-canvas">
+    <div className="analytics-canvas-hero"><div><p className="eyebrow">{role === "data_analyst" ? "ANALYTICS WORKSPACE" : "PLACEMENT INTELLIGENCE"}</p><h2>Placement analytics</h2><p className="muted">A decision-ready view of targets, pipeline health, outcomes, and follow-through for {cycleName.toLowerCase()}.</p></div><div className="analytics-hero-actions"><span className="analytics-view-badge"><span className="status-dot" />Live university view</span><button className="btn secondary" onClick={() => downloadCsv("vextra-placement-analytics.csv", exportRows)}><Download size={14} />Export CSV</button><button className="btn secondary" onClick={() => window.print()}>Print / PDF</button></div></div>
+    <div className="analytics-slicer-shell panel"><div className="analytics-slicer-head"><div><p className="eyebrow">GLOBAL SLICERS</p><h3>Choose the view you want to analyse</h3><span className="muted">Cycle controls the whole canvas. The remaining slicers refine every KPI, visual, alert, and record below.</span></div><div className="analytics-slicer-actions"><span className="count">{activeFilterCount} active</span><button type="button" className="text-btn" onClick={resetFilters} disabled={!activeFilterCount}>Reset all</button><button type="button" className="icon-btn analytics-filter-toggle" onClick={() => setFiltersOpen((current) => !current)} aria-expanded={filtersOpen} aria-controls="analytics-slicers">{filtersOpen ? "Hide filters" : "Show filters"}<ChevronRight size={15} className={filtersOpen ? "is-open" : ""} /></button></div></div>{filtersOpen && <div id="analytics-slicers" className="analytics-slicers"><label className="analytics-slicer primary"><span>Cycle / season</span><select value={cycleFilter} onChange={(event) => setCycle(event.target.value)}><option value="">All cycles</option>{seasons.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.academic_year}</option>)}</select></label><label className="analytics-slicer search-slicer"><span>Search records</span><div className="search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Company, manager, industry, city, action…" /></div></label><label className="analytics-slicer"><span>Manager</span><select value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)}><option value="">All managers</option>{managerOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>Category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>Industry</span><select value={industryFilter} onChange={(event) => setIndustryFilter(event.target.value)}><option value="">All industries</option>{industryOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="analytics-slicer"><span>City</span><select value={cityFilter} onChange={(event) => setCityFilter(event.target.value)}><option value="">All cities</option>{cityOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label><label className="analytics-slicer"><span>Pipeline stage</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All stages</option>{placementPipelineStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Outlook</span><select value={outlookFilter} onChange={(event) => setOutlookFilter(event.target.value)}><option value="">All outlooks</option>{placementOutlooks.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Drive status</span><select value={driveFilter} onChange={(event) => setDriveFilter(event.target.value)}><option value="">All drive statuses</option>{placementDriveStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="analytics-slicer"><span>Date focus</span><select value={dateFilter} onChange={(event) => setDateFilter(event.target.value)}><option value="">All dates</option><option value="next_30">Expected next 30 days</option><option value="overdue">Overdue follow-ups</option><option value="last_30">Contacted in last 30 days</option></select></label></div>}{activeFilterCount > 0 && <div className="analytics-filter-chips">{Object.entries(filterNames).filter(([, value]) => value).map(([key, value]) => <button type="button" className="analytics-filter-chip" key={key} onClick={() => removeFilter(key)}>{key === "cycle" ? "Cycle" : key === "date" ? "Date" : key === "focus" ? "Focus" : key[0].toUpperCase() + key.slice(1)}: {value}<X size={12} /></button>)}</div>}</div>
+    <div className="analytics-context-line"><span><b>{rows.length}</b> of {allRows.length} placement records shown</span><span>Targets respect cycle, manager, and category filters</span><span>Updated {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+    <div className="report-stats analytics-stat-grid analytics-canvas-kpis">{kpis.map(([label, value, note]) => <div className="stat analytics-kpi" key={label}><span>{label}</span><strong>{value || 0}</strong><small>{note}</small></div>)}</div>
+    <AnalyticsCanvasSection eyebrow="1 · TARGET DELIVERY" title="Are we on track against the declared targets?" description="Start with the selected cycle, manager, and category context before reviewing operational performance." className="target-canvas-section"><div className="analytics-target-summary"><div><span>Company acquisition</span><strong>{progress}%</strong><small>{totals.companies_acquired || 0} acquired of {targetTotals.companies_target || 0} target companies</small></div><div className="analytics-progress-track"><i style={{ width: `${progress}%` }} /></div><div className="analytics-target-summary-meta"><span><b>{targetTotals.drives_target || 0}</b> drive target</span><span><b>{targetTotals.offers_target || 0}</b> offer target</span><span><b>{targetTotals.students_placed_target || 0}</b> placed target</span></div></div><div className="analytics-mini-grid">{[["Companies", totals.companies_acquired, targetTotals.companies_target], ["Drives", totals.drives_conducted, targetTotals.drives_target], ["Offers", totals.offers_received, targetTotals.offers_target], ["Placed", totals.students_placed, targetTotals.students_placed_target], ["Joined", totals.students_joined, targetTotals.students_joined_target]].map(([label, actual, target]) => <div key={label}><span>{label}</span><b>{actual || 0} <small>/ {target || 0}</small></b><i><em style={{ width: `${target ? Math.min(100, Math.round((actual / target) * 100)) : 0}%` }} /></i></div>)}</div></AnalyticsCanvasSection>
+    <AnalyticsCanvasSection eyebrow="2 · CRITICAL WORK" title="What needs attention next?" description="Select a signal to focus the entire canvas on the records behind it." className="critical-work-section"><div className="analytics-alert-grid">{[["overdue", "Overdue follow-ups", summary.overdue, "Follow-ups past their due date", "danger", () => setDateFilter("overdue")], ["upcoming", "Upcoming activity", summary.upcoming, "Expected within 30 days", "info", () => setDateFilter("next_30")], ["negative", "Negative outlook", summary.negative, "Companies needing a recovery plan", "danger", () => setOutlookFilter("negative")], ["missing_action", "Missing next action", summary.missingAction, "Records without a clear next step", "warning", () => setFocusFilter("missing_action")], ["stalled", "On hold", summary.stalled, "Pipeline records temporarily paused", "warning", () => setFocusFilter("stalled")]].map(([key, label, count, note, tone, action]) => <button type="button" className={`analytics-alert-card ${tone} ${focusFilter === key || (key === "overdue" && dateFilter === "overdue") || (key === "upcoming" && dateFilter === "next_30") || (key === "negative" && outlookFilter === "negative") ? "selected" : ""}`} key={key} onClick={action}><span>{label}</span><strong>{count}</strong><small>{note}</small><ArrowUpRight size={15} /></button>)}</div></AnalyticsCanvasSection>
+    <div className="analytics-visual-grid"><AnalyticsCanvasSection eyebrow="3 · PIPELINE HEALTH" title="Where are companies in the journey?" description="Click a stage to filter the canvas." className="pipeline-canvas-section"><div className="analytics-bar-list">{placementPipelineStatuses.map(([key, label]) => { const count = statusCounts[key] || 0; return <button type="button" className={`analytics-bar-row ${statusFilter === key ? "selected" : ""}`} key={key} onClick={() => setStatusFilter(statusFilter === key ? "" : key)}><span>{label}</span><i><em style={{ width: `${Math.round((count / Math.max(1, ...Object.values(statusCounts))) * 100)}%` }} /></i><b>{count}</b></button>; })}</div></AnalyticsCanvasSection><AnalyticsCanvasSection eyebrow="4 · OUTCOMES" title="How is the funnel converting?" description="Volume and conversion rates from registration to joining." className="outcomes-canvas-section"><div className="analytics-funnel">{funnel.map(([key, label, value], index) => <div className="analytics-funnel-row" key={key}><span>{label}</span><i><em style={{ width: `${Math.round((value / maxStage) * 100)}%` }} /></i><b>{value || 0}</b>{index > 0 && <small>{funnel[index - 1][2] ? `${Math.round((value / funnel[index - 1][2]) * 100)}%` : "0%"}</small>}</div>)}</div></AnalyticsCanvasSection></div>
+    <AnalyticsCanvasSection eyebrow="5 · COMPARISONS" title="What patterns should an analyst investigate?" description="These tables use the same active filter context and are intentionally limited to decision-useful comparisons." defaultOpen={false} className="comparison-canvas-section"><div className="analytics-comparison-grid">{[["Placement managers", managerRows, "Manager"], ["Categories", categoryRows, "Category"], ["Industries", industryRows, "Industry"], ["Cities", cityRows, "City"]].map(([title, comparisonRows, label]) => <div className="analytics-comparison-card" key={title}><div className="analytics-subhead"><div><b>{title}</b><span>Ranked by students placed</span></div><span className="count">{comparisonRows.length}</span></div><div className="analytics-comparison-table"><div className="analytics-comparison-header"><span>{label}</span><span>Companies</span><span>Placed</span><span>Joined</span></div>{comparisonRows.slice(0, 8).map((row) => <div className="analytics-comparison-row" key={row.id}><span title={row.label}>{row.label}</span><b>{row.companies_acquired || 0}</b><b>{row.students_placed || 0}</b><b>{row.students_joined || 0}</b></div>)}{!comparisonRows.length && <p className="muted analytics-no-data">No comparison data in this view.</p>}</div></div>)}</div></AnalyticsCanvasSection>
+    <AnalyticsCanvasSection eyebrow="6 · DETAIL" title="Which records make up this result?" description="Review the filtered companies without letting a wide table expand the whole page." className="detail-canvas-section"><div className="analytics-detail-toolbar"><span><b>{rows.length}</b> records in current view</span><span className="muted">Expand a row for registration, selection, offer, and follow-up detail.</span></div><div className="analytics-detail-scroll" role="region" aria-label="Filtered placement records" tabIndex="0"><table className="analytics-detail-table"><thead><tr><th aria-label="Expand" /><th>Company</th><th>Owner</th><th>Cycle</th><th>Category</th><th>Stage</th><th>Outlook</th><th>Expected</th><th>Drive</th><th>Placed</th><th>Joined</th></tr></thead><tbody>{rows.map((row) => { const expanded = expandedRows.has(row.id); return <React.Fragment key={row.id}><tr className={row.outlook === "negative" || row.pipeline_status === "cancelled" ? "analytics-row-negative" : ""}><td><button type="button" className="analytics-expand-btn" aria-label={`${expanded ? "Collapse" : "Expand"} ${row.organization_name || "company"}`} aria-expanded={expanded} onClick={() => toggleRow(row.id)}><ChevronRight size={15} className={expanded ? "is-open" : ""} /></button></td><td><b>{row.organization_name || "Organization"}</b><small>{row.city || row.industry || "—"}</small></td><td>{row.placement_manager_name || "Placement manager"}</td><td>{row.season_name || "Cycle"}</td><td>{row.category_name || "Uncategorized"}</td><td><span className={`pipeline-status ${statusClass(row.pipeline_status)}`}>{row.pipeline_status_label || labelFor(placementPipelineStatuses, row.pipeline_status)}</span></td><td><span className={`outlook-pill ${row.outlook || "neutral"}`}>{row.outlook_label || labelFor(placementOutlooks, row.outlook)}</span></td><td className={row.expected_date && row.expected_date < today && !["joined", "cancelled"].includes(row.pipeline_status) ? "danger-number" : ""}>{row.expected_date || "—"}</td><td><span className={`drive-pill ${statusClass(row.drive_status)}`}>{row.drive_status_label || labelFor(placementDriveStatuses, row.drive_status)}</span></td><td>{row.students_placed || 0}</td><td>{row.students_joined || 0}</td></tr>{expanded && <tr className="analytics-detail-expanded"><td colSpan="11"><div><span><b>Registered</b>{row.students_registered || 0}</span><span><b>Selected</b>{row.students_selected || 0}</span><span><b>Offers</b>{row.offers_received || 0}</span><span><b>Follow-up</b>{row.next_follow_up_date || "—"}</span><span><b>Next action</b>{row.next_action || row.notes || "No next action recorded"}</span></div></td></tr>}</React.Fragment>})}</tbody></table>{!rows.length && <div className="empty-state"><h3>No records match this view</h3><p className="muted">Reset a filter or choose a broader cycle to see placement records.</p></div>}</div></AnalyticsCanvasSection>
+  </div>;
+}
+
 function PlacementAnalytics({ analytics, data = {}, role }) {
   const [seasonFilter, setSeasonFilter] = useState(() => localStorage.getItem("placement-season-filter") || "");
   const [statusFilter, setStatusFilter] = useState("");
@@ -2785,6 +2915,56 @@ function PlacementSetupWizard({ data, users, onRefresh, onError, onSuccess }) {
     {step === 4 && <CitySelectionStep data={data} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} onNext={() => setStep(5)} />}
     {step === 5 && <div className="setup-grid"><form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return run(event, "/api/placement/targets", { season_id: form.get("season_id"), user_id: form.get("user_id"), category_id: form.get("category_id"), companies_target: Number(form.get("companies_target") || 0) }); }}><p className="eyebrow">STEP 5 OF 6</p><h3>Declare manager targets</h3><p className="muted">Set one measurable company target for each placement manager and category. Coordinators and managers record drives and student outcomes later.</p><Select label="Season" name="season_id" defaultValue={seasonId}><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select label="Placement manager" name="user_id" required><option value="">Choose placement manager</option>{teamMembers.filter((item) => item.role === "placement_manager").map((item) => <option key={item.id} value={item.id}>{item.full_name} · placement manager</option>)}</Select><Select label="Company category" name="category_id" required><option value="">Choose category</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Field label="Company target" name="companies_target" type="number" min="0" defaultValue="0" /><small className="form-help">How many companies should this manager bring into this category for the selected season?</small><button className="btn primary" disabled={busy}>Save manager target</button><button type="button" className="btn secondary setup-next" onClick={() => setStep(6)}>Continue to access</button></form><div className="panel table-panel target-setup-table"><div className="panel-head"><div><p className="eyebrow">TARGETS SAVED</p><h3>Manager targets by category</h3><span className="muted">Declared by University Admin</span></div></div><table><thead><tr><th>Season</th><th>Manager</th><th>Category</th><th>Company target</th></tr></thead><tbody>{(data.targets || []).map((item) => <tr key={item.id}><td>{data.seasons?.find((season) => String(season.id) === String(item.season_id))?.name || "Season"}</td><td>{users.find((person) => String(person.id) === String(item.user_id))?.full_name || "Team member"}</td><td>{data.categories?.find((category) => String(category.id) === String(item.category_id))?.name || "Category"}</td><td><b>{item.companies_target || 0}</b></td></tr>)}</tbody></table>{!data.targets?.length && <div className="empty-state"><p className="muted">No manager targets saved yet.</p></div>}</div></div>}
     {step === 6 && <div className="setup-access-step"><div className="panel setup-access-intro"><p className="eyebrow">STEP 6 OF 6</p><h3>Set team access</h3><p className="muted">Choose exactly what each coordinator can see. Without a grant, company and contact details stay masked.</p><span className="access-flow-hint">Select coordinator → choose access level → select areas → save policy</span></div><AccessGrantPanel users={users} grants={data.access} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /><div className="panel setup-complete"><span className="setup-complete-icon">✓</span><div><h3>Placement setup is ready</h3><p className="muted">You can return to any step at any time to update your university configuration.</p></div><button type="button" className="btn secondary" onClick={() => setStep(1)}>Review from the beginning</button></div></div>}
+  </div></div>;
+}
+
+function IndustryCatalogPanel({ data, onRefresh, onError, onSuccess }) {
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const save = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const payload = { name: form.get("name"), description: form.get("description") || null };
+    setBusy(true);
+    try {
+      await apiFetch(editing ? `/api/placement/industries/${editing.id}` : "/api/placement/industries", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      await onRefresh();
+      onSuccess(editing ? "Industry updated." : "Industry added.");
+      setEditing(null);
+      event.currentTarget.reset();
+    } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  return <div className="panel industry-catalog-panel"><div className="panel-head"><div><p className="eyebrow">STEP 4 OF 7 · EMPLOYER CLASSIFICATION</p><h3>Set the industry list</h3><span className="muted">Placement Managers can only choose from this list when adding a company. Keep names consistent for reliable analytics.</span></div></div><form key={editing?.id || "new-industry"} className="industry-catalog-form" onSubmit={save}><Field label="Industry name" name="name" defaultValue={editing?.name || ""} placeholder="e.g. Information Technology" /><Field label="Description" name="description" required={false} defaultValue={editing?.description || ""} placeholder="Optional reporting definition" /><div className="industry-catalog-actions"><button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save industry" : "Add industry"}</button>{editing && <button type="button" className="btn secondary" onClick={() => setEditing(null)}>Cancel</button>}</div></form><div className="industry-catalog-list">{(data.industries || []).map((item) => <div className="record-row" key={item.id}><span><b>{item.name}</b><small>{item.description || "Available to placement managers and analytics"}</small></span><button type="button" className="text-btn" onClick={() => setEditing(item)}><Pencil size={13} />Edit</button></div>)}{!data.industries?.length && <div className="empty-state"><p className="muted">Add the first industry to enable employer classification.</p></div>}</div></div>;
+}
+
+function PlacementSetupWizardV2({ data, users, onRefresh, onError, onSuccess }) {
+  const [step, setStep] = useState(1);
+  const [seasonId, setSeasonId] = useState(data.seasons?.[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!seasonId && data.seasons?.[0]?.id) setSeasonId(data.seasons[0].id); }, [data.seasons, seasonId]);
+  const save = async (event, path, payload, nextStep) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await apiFetch(path, { method: "POST", body: JSON.stringify(payload) });
+      await onRefresh();
+      if (result?.id && path.endsWith("/seasons")) setSeasonId(result.id);
+      onSuccess("Saved successfully.");
+      if (nextStep) setStep(nextStep);
+      event.currentTarget.reset();
+    } catch (error) { onError(error.message); } finally { setBusy(false); }
+  };
+  const assignments = (data.assignments || []).filter((item) => String(item.season_id) === String(seasonId));
+  const teamMembers = (users || []).filter((item) => ["coordinator", "placement_manager"].includes(item.role));
+  const steps = [[1, "Season", "Create the placement cycle"], [2, "People", "Add users to the cycle"], [3, "Categories", "Define your CTC bands"], [4, "Industries", "Classify employers"], [5, "Cities", "Choose allowed locations"], [6, "Targets", "Set team goals"], [7, "Access", "Control visibility"]];
+  return <div className="setup-wizard"><div className="section-heading"><div><p className="eyebrow">UNIVERSITY ADMIN SETUP</p><h2>Configure placements step by step</h2><p className="muted">Complete each step in order. Your university controls seasons, categories, industries, cities, targets, and access.</p></div></div><div className="setup-steps">{steps.map(([number, label, hint]) => <button type="button" key={number} className={`setup-step ${step === number ? "active" : ""} ${step > number ? "complete" : ""}`} onClick={() => setStep(number)}><span>{step > number ? "✓" : number}</span><b>{label}</b><small>{hint}</small></button>)}</div><div className="setup-step-content">
+    {step === 1 && <form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return save(event, "/api/placement/seasons", { name: form.get("name"), academic_year: form.get("academic_year"), start_date: form.get("start_date"), end_date: form.get("end_date"), status: form.get("status") }, 2); }}><p className="eyebrow">STEP 1 OF 7</p><h3>Create a placement season</h3><p className="muted">A season is an independent placement cycle. Multiple seasons can be active at the same time.</p><Field label="Season name" name="name" placeholder="Campus placements" /><div className="form-grid"><Field label="Academic year" name="academic_year" placeholder="2026–2027" /><Select label="Status" name="status" defaultValue="active"><option value="active">Active</option><option value="completed">Completed</option></Select></div><div className="form-grid"><Field label="Start date" name="start_date" type="date" /><Field label="End date" name="end_date" type="date" /></div><button className="btn primary" disabled={busy}>Create season and continue</button></form>}
+    {step === 2 && <SeasonPeopleStep data={data} users={users} seasonId={seasonId} setSeasonId={setSeasonId} assignments={assignments} teamMembers={teamMembers} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} onNext={() => setStep(3)} />}
+    {step === 3 && <div className="setup-grid"><form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return save(event, "/api/placement/categories", { name: form.get("name"), min_ctc_lpa: form.get("min_ctc_lpa") ? Number(form.get("min_ctc_lpa")) : null, max_ctc_lpa: form.get("max_ctc_lpa") ? Number(form.get("max_ctc_lpa")) : null, description: form.get("description") }); }}><p className="eyebrow">STEP 3 OF 7</p><h3>Define company categories</h3><p className="muted">Create the CTC bands used by your university.</p><Field label="Category name" name="name" placeholder="e.g. Dream, Super Dream, Core" /><div className="form-grid"><Field label="Minimum CTC (LPA)" name="min_ctc_lpa" type="number" step="0.01" /><Field label="Maximum CTC (LPA)" name="max_ctc_lpa" type="number" step="0.01" /></div><Field label="Description" name="description" placeholder="Optional explanation for your team" required={false} /><button className="btn primary" disabled={busy}>Add university category</button><button type="button" className="btn secondary setup-next" onClick={() => setStep(4)}>Continue to industries</button></form><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">YOUR CATEGORIES</p><h3>Available to the placement team</h3></div></div><table><thead><tr><th>Category</th><th>CTC range</th></tr></thead><tbody>{(data.categories || []).map((item) => <tr key={item.id}><td><b>{item.name}</b><small>{item.description || "University-defined category"}</small></td><td>{item.min_ctc_lpa ?? 0}–{item.max_ctc_lpa ?? "No upper limit"} LPA</td></tr>)}</tbody></table>{!data.categories?.length && <div className="empty-state"><p className="muted">Add your first category.</p></div>}</div></div>}
+    {step === 4 && <div><IndustryCatalogPanel data={data} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /><button type="button" className="btn secondary setup-next" onClick={() => setStep(5)}>Continue to cities</button></div>}
+    {step === 5 && <CitySelectionStep data={data} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} onNext={() => setStep(6)} />}
+    {step === 6 && <div className="setup-grid"><form className="panel form-card" onSubmit={(event) => { const form = new FormData(event.currentTarget); return save(event, "/api/placement/targets", { season_id: form.get("season_id"), user_id: form.get("user_id"), category_id: form.get("category_id") || null, companies_target: Number(form.get("companies_target") || 0), drives_target: Number(form.get("drives_target") || 0), offers_target: Number(form.get("offers_target") || 0), students_placed_target: Number(form.get("students_placed_target") || 0), students_joined_target: Number(form.get("students_joined_target") || 0) }); }}><p className="eyebrow">STEP 6 OF 7</p><h3>Declare manager targets</h3><p className="muted">Set measurable goals for each placement manager and category.</p><Select label="Season" name="season_id" defaultValue={seasonId}><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select label="Placement manager" name="user_id"><option value="">Choose placement manager</option>{teamMembers.filter((item) => item.role === "placement_manager").map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</Select><Select label="Company category" name="category_id"><option value="">Choose category</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><div className="form-grid">{[["companies_target", "Companies"], ["drives_target", "Drives"], ["offers_target", "Offers"], ["students_placed_target", "Placed students"], ["students_joined_target", "Joined students"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue="0" />)}</div><button className="btn primary" disabled={busy}>Save manager target</button><button type="button" className="btn secondary setup-next" onClick={() => setStep(7)}>Continue to access</button></form><div className="panel table-panel target-setup-table"><div className="panel-head"><div><p className="eyebrow">TARGETS SAVED</p><h3>Manager targets by category</h3></div></div><table><thead><tr><th>Season</th><th>Manager</th><th>Category</th><th>Companies</th></tr></thead><tbody>{(data.targets || []).map((item) => <tr key={item.id}><td>{data.seasons?.find((season) => String(season.id) === String(item.season_id))?.name || "Season"}</td><td>{users.find((person) => String(person.id) === String(item.user_id))?.full_name || "Team member"}</td><td>{data.categories?.find((category) => String(category.id) === String(item.category_id))?.name || "Category"}</td><td><b>{item.companies_target || 0}</b></td></tr>)}</tbody></table>{!data.targets?.length && <div className="empty-state"><p className="muted">No manager targets saved yet.</p></div>}</div></div>}
+    {step === 7 && <div className="setup-access-step"><div className="panel setup-access-intro"><p className="eyebrow">STEP 7 OF 7</p><h3>Set team access</h3><p className="muted">Choose exactly what each coordinator can see.</p><span className="access-flow-hint">Select coordinator → choose access level → select areas → save policy</span></div><AccessGrantPanel users={users} grants={data.access} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /><div className="panel setup-complete"><span className="setup-complete-icon">✓</span><div><h3>Placement setup is ready</h3><p className="muted">You can return to any step at any time.</p></div><button type="button" className="btn secondary" onClick={() => setStep(1)}>Review from the beginning</button></div></div>}
   </div></div>;
 }
 

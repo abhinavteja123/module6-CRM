@@ -1,0 +1,573 @@
+- generic [ref=f2e49]:
+  - complementary [ref=f2e50]:
+    - generic [ref=f2e51]:
+      - generic [ref=f2e52]: P
+      - generic [ref=f2e53]:
+        - strong [ref=f2e54]: VextraAI
+        - generic [ref=f2e55]: RELATIONSHIP OS
+    - generic [ref=f2e56]: WORKSPACE
+    - navigation [ref=f2e57]:
+      - button "Overview" [ref=f2e58] [cursor=pointer]
+      - button "Team" [ref=f2e65] [cursor=pointer]
+      - button "Direct Team" [ref=f2e72] [cursor=pointer]
+      - button "Placement Setup" [ref=f2e79] [cursor=pointer]
+      - button "Analytics" [active] [ref=f2e84] [cursor=pointer]
+      - button "Contact Approvals" [ref=f2e91] [cursor=pointer]
+      - button "Organizations" [ref=f2e96] [cursor=pointer]
+      - button "Contacts" [ref=f2e102] [cursor=pointer]
+      - button "Meeting Reports" [ref=f2e109] [cursor=pointer]
+    - button "Sign out" [ref=f2e115] [cursor=pointer]
+  - main [ref=f2e119]:
+    - generic [ref=f2e120]:
+      - generic [ref=f2e121]:
+        - paragraph [ref=f2e122]: UNIVERSITY ADMIN
+        - heading "Analytics" [level=1] [ref=f2e123]
+      - generic [ref=f2e124]:
+        - button "Open global search" [ref=f2e125] [cursor=pointer]:
+          - generic [ref=f2e129]: Search everything
+          - generic [ref=f2e130]: Ctrl K
+        - button "Open notifications" [ref=f2e132] [cursor=pointer]
+        - generic [ref=f2e136]:
+          - generic [ref=f2e137]: SH
+          - generic [ref=f2e138]:
+            - text: SRM Head
+            - generic [ref=f2e139]: university admin
+          - button "Change password" [ref=f2e140] [cursor=pointer]
+    - generic [ref=f2e145]:
+      - generic [ref=f2e146]:
+        - text: Updated 05:22 PM
+        - button "Refresh" [ref=f2e150] [cursor=pointer]
+      - generic [ref=f2e156]:
+        - generic [ref=f2e157]:
+          - generic [ref=f2e158]:
+            - paragraph [ref=f2e159]: PLACEMENT INTELLIGENCE
+            - heading "Placement analytics" [level=2] [ref=f2e160]
+            - paragraph [ref=f2e161]: A decision-ready view of targets, pipeline health, outcomes, and follow-through for all cycles.
+          - generic [ref=f2e162]:
+            - generic [ref=f2e163]: Live university view
+            - button "Export CSV" [ref=f2e165] [cursor=pointer]
+            - button "Print / PDF" [ref=f2e169] [cursor=pointer]
+        - generic [ref=f2e170]:
+          - generic [ref=f2e171]:
+            - generic [ref=f2e172]:
+              - paragraph [ref=f2e173]: GLOBAL SLICERS
+              - heading "Choose the view you want to analyse" [level=3] [ref=f2e174]
+              - generic [ref=f2e175]: Cycle controls the whole canvas. The remaining slicers refine every KPI, visual, alert, and record below.
+            - generic [ref=f2e176]:
+              - generic [ref=f2e177]: 0 active
+              - button "Reset all" [disabled] [ref=f2e178]
+              - button "Hide filters" [expanded] [ref=f2e179] [cursor=pointer]
+          - generic [ref=f2e182]:
+            - generic [ref=f2e183]:
+              - generic [ref=f2e184]: Cycle / season
+              - combobox "Cycle / season" [ref=f2e185]:
+                - option "All cycles" [selected]
+                - option "2028 · 2024-2028"
+                - option "2027 · 2023-2027"
+            - generic [ref=f2e186]:
+              - generic [ref=f2e187]: Search records
+              - textbox "Search records" [ref=f2e192]:
+                - /placeholder: Company, manager, city, action…
+            - generic [ref=f2e193]:
+              - generic [ref=f2e194]: Manager
+              - combobox "Manager" [ref=f2e195]:
+                - option "All managers" [selected]
+                - option "Ravi"
+                - option "saisai"
+                - option "suresh"
+            - generic [ref=f2e196]:
+              - generic [ref=f2e197]: Category
+              - combobox "Category" [ref=f2e198]:
+                - option "All categories" [selected]
+                - option "Day - 1"
+                - option "Dream"
+                - option "Marquee"
+                - option "Super Dream"
+            - generic [ref=f2e199]:
+              - generic [ref=f2e200]: City
+              - combobox "City" [ref=f2e201]:
+                - option "All cities" [selected]
+                - option "Bengaluru"
+                - option "Chennai"
+                - option "Gurugram"
+                - option "Hyderabad"
+                - option "Infosys"
+                - option "Mumbai"
+                - option "Noida"
+                - option "Pune"
+            - generic [ref=f2e202]:
+              - generic [ref=f2e203]: Pipeline stage
+              - combobox "Pipeline stage" [ref=f2e204]:
+                - option "All stages" [selected]
+                - option "Prospect"
+                - option "Outreach"
+                - option "In talks"
+                - option "Discussion"
+                - option "Proposal shared"
+                - option "Negotiation"
+                - option "Drive scheduled"
+                - option "Drive completed"
+                - option "Offer stage"
+                - option "Placed"
+                - option "Joined"
+                - option "On hold"
+                - option "Cancelled"
+            - generic [ref=f2e205]:
+              - generic [ref=f2e206]: Outlook
+              - combobox "Outlook" [ref=f2e207]:
+                - option "All outlooks" [selected]
+                - option "Positive"
+                - option "Neutral"
+                - option "Negative"
+            - generic [ref=f2e208]:
+              - generic [ref=f2e209]: Drive status
+              - combobox "Drive status" [ref=f2e210]:
+                - option "All drive statuses" [selected]
+                - option "Not scheduled"
+                - option "Tentative"
+                - option "Scheduled"
+                - option "Completed"
+                - option "Cancelled"
+            - generic [ref=f2e211]:
+              - generic [ref=f2e212]: Date focus
+              - combobox "Date focus" [ref=f2e213]:
+                - option "All dates" [selected]
+                - option "Expected next 30 days"
+                - option "Overdue follow-ups"
+                - option "Contacted in last 30 days"
+        - generic [ref=f2e214]:
+          - generic [ref=f2e215]: 13 of 13 placement records shown
+          - generic [ref=f2e216]: Targets respect cycle, manager, and category filters
+          - generic [ref=f2e217]: Updated 05:22 PM
+        - generic [ref=f2e218]:
+          - generic [ref=f2e219]:
+            - text: Companies acquired
+            - strong [ref=f2e220]: "10"
+            - text: 6% of target
+          - generic [ref=f2e221]:
+            - text: Company target
+            - strong [ref=f2e222]: "172"
+            - text: 6% acquired
+          - generic [ref=f2e223]:
+            - text: Drives completed
+            - strong [ref=f2e224]: "4"
+            - text: 4 completed
+          - generic [ref=f2e225]:
+            - text: Offers received
+            - strong [ref=f2e226]: "252"
+            - text: 0% of selected
+          - generic [ref=f2e227]:
+            - text: Students placed
+            - strong [ref=f2e228]: "240"
+            - text: 95% of offers
+          - generic [ref=f2e229]:
+            - text: Students joined
+            - strong [ref=f2e230]: "234"
+            - text: 98% of placed
+          - generic [ref=f2e231]:
+            - text: Active pipeline
+            - strong [ref=f2e232]: "10"
+            - text: 13 tracked records
+          - generic [ref=f2e233]:
+            - text: Needs attention
+            - strong [ref=f2e234]: "8"
+            - text: 6 overdue · 2 negative
+        - group [ref=f2e235]:
+          - generic "1 · TARGET DELIVERY Are we on track against the declared targets? Start with the selected cycle, manager, and category context before reviewing operational performance." [ref=f2e236] [cursor=pointer]:
+            - generic [ref=f2e237]:
+              - paragraph [ref=f2e238]: 1 · TARGET DELIVERY
+              - heading "Are we on track against the declared targets?" [level=3] [ref=f2e239]
+              - generic [ref=f2e240]: Start with the selected cycle, manager, and category context before reviewing operational performance.
+          - generic [ref=f2e243]:
+            - generic [ref=f2e244]:
+              - generic [ref=f2e245]:
+                - generic [ref=f2e246]: Company acquisition
+                - strong [ref=f2e247]: 6%
+                - generic [ref=f2e248]: 10 acquired of 172 target companies
+              - generic [ref=f2e251]:
+                - generic [ref=f2e252]:
+                  - generic [ref=f2e253]: "33"
+                  - text: drive target
+                - generic [ref=f2e254]:
+                  - generic [ref=f2e255]: "72"
+                  - text: offer target
+                - generic [ref=f2e256]:
+                  - generic [ref=f2e257]: "96"
+                  - text: placed target
+            - generic [ref=f2e258]:
+              - generic [ref=f2e259]:
+                - generic [ref=f2e260]: Companies
+                - generic [ref=f2e261]:
+                  - text: "10"
+                  - generic [ref=f2e262]: / 172
+                - emphasis [ref=f2e264]
+              - generic [ref=f2e265]:
+                - generic [ref=f2e266]: Drives
+                - generic [ref=f2e267]:
+                  - text: "4"
+                  - generic [ref=f2e268]: / 33
+                - emphasis [ref=f2e270]
+              - generic [ref=f2e271]:
+                - generic [ref=f2e272]: Offers
+                - generic [ref=f2e273]:
+                  - text: "252"
+                  - generic [ref=f2e274]: / 72
+                - emphasis [ref=f2e276]
+              - generic [ref=f2e277]:
+                - generic [ref=f2e278]: Placed
+                - generic [ref=f2e279]:
+                  - text: "240"
+                  - generic [ref=f2e280]: / 96
+                - emphasis [ref=f2e282]
+              - generic [ref=f2e283]:
+                - generic [ref=f2e284]: Joined
+                - generic [ref=f2e285]:
+                  - text: "234"
+                  - generic [ref=f2e286]: / 72
+                - emphasis [ref=f2e288]
+        - group [ref=f2e289]:
+          - generic "2 · CRITICAL WORK What needs attention next? Select a signal to focus the entire canvas on the records behind it." [ref=f2e290] [cursor=pointer]:
+            - generic [ref=f2e291]:
+              - paragraph [ref=f2e292]: 2 · CRITICAL WORK
+              - heading "What needs attention next?" [level=3] [ref=f2e293]
+              - generic [ref=f2e294]: Select a signal to focus the entire canvas on the records behind it.
+          - generic [ref=f2e298]:
+            - button "Overdue follow-ups 6 Follow-ups past their due date" [ref=f2e299] [cursor=pointer]:
+              - generic [ref=f2e300]: Overdue follow-ups
+              - strong [ref=f2e301]: "6"
+              - generic [ref=f2e302]: Follow-ups past their due date
+            - button "Upcoming activity 4 Expected within 30 days" [ref=f2e306] [cursor=pointer]:
+              - generic [ref=f2e307]: Upcoming activity
+              - strong [ref=f2e308]: "4"
+              - generic [ref=f2e309]: Expected within 30 days
+            - button "Negative outlook 2 Companies needing a recovery plan" [ref=f2e313] [cursor=pointer]:
+              - generic [ref=f2e314]: Negative outlook
+              - strong [ref=f2e315]: "2"
+              - generic [ref=f2e316]: Companies needing a recovery plan
+            - button "Missing next action 1 Records without a clear next step" [ref=f2e320] [cursor=pointer]:
+              - generic [ref=f2e321]: Missing next action
+              - strong [ref=f2e322]: "1"
+              - generic [ref=f2e323]: Records without a clear next step
+            - button "On hold 1 Pipeline records temporarily paused" [ref=f2e327] [cursor=pointer]:
+              - generic [ref=f2e328]: On hold
+              - strong [ref=f2e329]: "1"
+              - generic [ref=f2e330]: Pipeline records temporarily paused
+        - generic [ref=f2e334]:
+          - group [ref=f2e335]:
+            - generic "3 · PIPELINE HEALTH Where are companies in the journey? Click a stage to filter the canvas." [ref=f2e336] [cursor=pointer]:
+              - generic [ref=f2e337]:
+                - paragraph [ref=f2e338]: 3 · PIPELINE HEALTH
+                - heading "Where are companies in the journey?" [level=3] [ref=f2e339]
+                - generic [ref=f2e340]: Click a stage to filter the canvas.
+            - generic [ref=f2e344]:
+              - button "Prospect 1" [ref=f2e345] [cursor=pointer]:
+                - generic [ref=f2e346]: Prospect
+                - emphasis [ref=f2e348]
+                - generic [ref=f2e349]: "1"
+              - button "Outreach 1" [ref=f2e350] [cursor=pointer]:
+                - generic [ref=f2e351]: Outreach
+                - emphasis [ref=f2e353]
+                - generic [ref=f2e354]: "1"
+              - button "In talks 1" [ref=f2e355] [cursor=pointer]:
+                - generic [ref=f2e356]: In talks
+                - emphasis [ref=f2e358]
+                - generic [ref=f2e359]: "1"
+              - button "Discussion 2" [ref=f2e360] [cursor=pointer]:
+                - generic [ref=f2e361]: Discussion
+                - emphasis [ref=f2e363]
+                - generic [ref=f2e364]: "2"
+              - button "Proposal shared 0" [ref=f2e365] [cursor=pointer]:
+                - generic [ref=f2e366]: Proposal shared
+                - generic [ref=f2e367]:
+                  - emphasis
+                - generic [ref=f2e368]: "0"
+              - button "Negotiation 1" [ref=f2e369] [cursor=pointer]:
+                - generic [ref=f2e370]: Negotiation
+                - emphasis [ref=f2e372]
+                - generic [ref=f2e373]: "1"
+              - button "Drive scheduled 1" [ref=f2e374] [cursor=pointer]:
+                - generic [ref=f2e375]: Drive scheduled
+                - emphasis [ref=f2e377]
+                - generic [ref=f2e378]: "1"
+              - button "Drive completed 1" [ref=f2e379] [cursor=pointer]:
+                - generic [ref=f2e380]: Drive completed
+                - emphasis [ref=f2e382]
+                - generic [ref=f2e383]: "1"
+              - button "Offer stage 1" [ref=f2e384] [cursor=pointer]:
+                - generic [ref=f2e385]: Offer stage
+                - emphasis [ref=f2e387]
+                - generic [ref=f2e388]: "1"
+              - button "Placed 1" [ref=f2e389] [cursor=pointer]:
+                - generic [ref=f2e390]: Placed
+                - emphasis [ref=f2e392]
+                - generic [ref=f2e393]: "1"
+              - button "Joined 1" [ref=f2e394] [cursor=pointer]:
+                - generic [ref=f2e395]: Joined
+                - emphasis [ref=f2e397]
+                - generic [ref=f2e398]: "1"
+              - button "On hold 1" [ref=f2e399] [cursor=pointer]:
+                - generic [ref=f2e400]: On hold
+                - emphasis [ref=f2e402]
+                - generic [ref=f2e403]: "1"
+              - button "Cancelled 1" [ref=f2e404] [cursor=pointer]:
+                - generic [ref=f2e405]: Cancelled
+                - emphasis [ref=f2e407]
+                - generic [ref=f2e408]: "1"
+          - group [ref=f2e409]:
+            - generic "4 · OUTCOMES How is the funnel converting? Volume and conversion rates from registration to joining." [ref=f2e410] [cursor=pointer]:
+              - generic [ref=f2e411]:
+                - paragraph [ref=f2e412]: 4 · OUTCOMES
+                - heading "How is the funnel converting?" [level=3] [ref=f2e413]
+                - generic [ref=f2e414]: Volume and conversion rates from registration to joining.
+            - generic [ref=f2e418]:
+              - generic [ref=f2e419]:
+                - generic [ref=f2e420]: Registered
+                - emphasis [ref=f2e422]
+                - generic [ref=f2e423]: "810"
+              - generic [ref=f2e424]:
+                - generic [ref=f2e425]: Selected
+                - emphasis [ref=f2e427]
+                - generic [ref=f2e428]: "756"
+                - generic [ref=f2e429]: 93%
+              - generic [ref=f2e430]:
+                - generic [ref=f2e431]: Offers
+                - emphasis [ref=f2e433]
+                - generic [ref=f2e434]: "252"
+                - generic [ref=f2e435]: 33%
+              - generic [ref=f2e436]:
+                - generic [ref=f2e437]: Placed
+                - emphasis [ref=f2e439]
+                - generic [ref=f2e440]: "240"
+                - generic [ref=f2e441]: 95%
+              - generic [ref=f2e442]:
+                - generic [ref=f2e443]: Joined
+                - emphasis [ref=f2e445]
+                - generic [ref=f2e446]: "234"
+                - generic [ref=f2e447]: 98%
+        - group [ref=f2e448]:
+          - generic "5 · COMPARISONS What patterns should an analyst investigate? These tables use the same active filter context and are intentionally limited to decision-useful comparisons." [ref=f2e449] [cursor=pointer]:
+            - generic [ref=f2e450]:
+              - paragraph [ref=f2e451]: 5 · COMPARISONS
+              - heading "What patterns should an analyst investigate?" [level=3] [ref=f2e452]
+              - generic [ref=f2e453]: These tables use the same active filter context and are intentionally limited to decision-useful comparisons.
+        - group [ref=f2e456]:
+          - generic "6 · DETAIL Which records make up this result? Review the filtered companies without letting a wide table expand the whole page." [ref=f2e457] [cursor=pointer]:
+            - generic [ref=f2e458]:
+              - paragraph [ref=f2e459]: 6 · DETAIL
+              - heading "Which records make up this result?" [level=3] [ref=f2e460]
+              - generic [ref=f2e461]: Review the filtered companies without letting a wide table expand the whole page.
+          - generic [ref=f2e464]:
+            - generic [ref=f2e465]:
+              - generic [ref=f2e466]: 13 records in current view
+              - generic [ref=f2e467]: Expand a row for registration, selection, offer, and follow-up detail.
+            - region "Filtered placement records" [ref=f2e468]:
+              - table [ref=f2e469]:
+                - rowgroup [ref=f2e470]:
+                  - row [ref=f2e471]:
+                    - columnheader "Expand" [ref=f2e472]
+                    - columnheader "Company" [ref=f2e473]
+                    - columnheader "Owner" [ref=f2e474]
+                    - columnheader "Cycle" [ref=f2e475]
+                    - columnheader "Category" [ref=f2e476]
+                    - columnheader "Stage" [ref=f2e477]
+                    - columnheader "Outlook" [ref=f2e478]
+                    - columnheader "Expected" [ref=f2e479]
+                    - columnheader "Drive" [ref=f2e480]
+                    - columnheader "Placed" [ref=f2e481]
+                    - columnheader "Joined" [ref=f2e482]
+                - rowgroup [ref=f2e483]:
+                  - row [ref=f2e484]:
+                    - cell [ref=f2e485]:
+                      - button "Expand Bosch" [ref=f2e486] [cursor=pointer]
+                    - cell "Bosch Chennai" [ref=f2e489]:
+                      - text: Bosch
+                      - generic [ref=f2e490]: Chennai
+                    - cell "Ravi" [ref=f2e491]
+                    - cell "2028" [ref=f2e492]
+                    - cell "Super Dream" [ref=f2e493]
+                    - cell "Discussion" [ref=f2e494]
+                    - cell "Neutral" [ref=f2e496]
+                    - cell "2026-10-22" [ref=f2e498]
+                    - cell "Tentative" [ref=f2e499]
+                    - cell "34" [ref=f2e501]
+                    - cell "33" [ref=f2e502]
+                  - row [ref=f2e503]:
+                    - cell [ref=f2e504]:
+                      - button "Expand ServiceNow" [ref=f2e505] [cursor=pointer]
+                    - cell "ServiceNow Noida" [ref=f2e508]:
+                      - text: ServiceNow
+                      - generic [ref=f2e509]: Noida
+                    - cell "suresh" [ref=f2e510]
+                    - cell "2027" [ref=f2e511]
+                    - cell "Marquee" [ref=f2e512]
+                    - cell "Cancelled" [ref=f2e513]
+                    - cell "Negative" [ref=f2e515]
+                    - cell "2026-10-13" [ref=f2e517]
+                    - cell "Cancelled" [ref=f2e518]
+                    - cell "33" [ref=f2e520]
+                    - cell "33" [ref=f2e521]
+                  - row [ref=f2e522]:
+                    - cell [ref=f2e523]:
+                      - button "Expand HDFC Bank" [ref=f2e524] [cursor=pointer]
+                    - cell "HDFC Bank Mumbai" [ref=f2e527]:
+                      - text: HDFC Bank
+                      - generic [ref=f2e528]: Mumbai
+                    - cell "saisai" [ref=f2e529]
+                    - cell "2028" [ref=f2e530]
+                    - cell "Dream" [ref=f2e531]
+                    - cell "On hold" [ref=f2e532]
+                    - cell "Negative" [ref=f2e534]
+                    - cell "2026-10-04" [ref=f2e536]
+                    - cell "Cancelled" [ref=f2e537]
+                    - cell "32" [ref=f2e539]
+                    - cell "31" [ref=f2e540]
+                  - row [ref=f2e541]:
+                    - cell [ref=f2e542]:
+                      - button "Expand Zomato" [ref=f2e543] [cursor=pointer]
+                    - cell "Zomato Gurugram" [ref=f2e546]:
+                      - text: Zomato
+                      - generic [ref=f2e547]: Gurugram
+                    - cell "Ravi" [ref=f2e548]
+                    - cell "2027" [ref=f2e549]
+                    - cell "Day - 1" [ref=f2e550]
+                    - cell "Joined" [ref=f2e551]
+                    - cell "Positive" [ref=f2e553]
+                    - cell "2026-09-25" [ref=f2e555]
+                    - cell "Completed" [ref=f2e556]
+                    - cell "28" [ref=f2e558]
+                    - cell "28" [ref=f2e559]
+                  - row [ref=f2e560]:
+                    - cell [ref=f2e561]:
+                      - button "Expand Tata Motors" [ref=f2e562] [cursor=pointer]
+                    - cell "Tata Motors Pune" [ref=f2e565]:
+                      - text: Tata Motors
+                      - generic [ref=f2e566]: Pune
+                    - cell "suresh" [ref=f2e567]
+                    - cell "2028" [ref=f2e568]
+                    - cell "Super Dream" [ref=f2e569]
+                    - cell "Placed" [ref=f2e570]
+                    - cell "Positive" [ref=f2e572]
+                    - cell "2026-09-16" [ref=f2e574]
+                    - cell "Completed" [ref=f2e575]
+                    - cell "23" [ref=f2e577]
+                    - cell "22" [ref=f2e578]
+                  - row [ref=f2e579]:
+                    - cell [ref=f2e580]:
+                      - button "Expand L&T Technology Services" [ref=f2e581] [cursor=pointer]
+                    - cell "L&T Technology Services Mumbai" [ref=f2e584]:
+                      - text: L&T Technology Services
+                      - generic [ref=f2e585]: Mumbai
+                    - cell "saisai" [ref=f2e586]
+                    - cell "2027" [ref=f2e587]
+                    - cell "Marquee" [ref=f2e588]
+                    - cell "Offer stage" [ref=f2e589]
+                    - cell "Positive" [ref=f2e591]
+                    - cell "2026-09-07" [ref=f2e593]
+                    - cell "Completed" [ref=f2e594]
+                    - cell "22" [ref=f2e596]
+                    - cell "22" [ref=f2e597]
+                  - row [ref=f2e598]:
+                    - cell [ref=f2e599]:
+                      - button "Expand Microsoft" [ref=f2e600] [cursor=pointer]
+                    - cell "Microsoft Hyderabad" [ref=f2e603]:
+                      - text: Microsoft
+                      - generic [ref=f2e604]: Hyderabad
+                    - cell "Ravi" [ref=f2e605]
+                    - cell "2028" [ref=f2e606]
+                    - cell "Dream" [ref=f2e607]
+                    - cell "Drive completed" [ref=f2e608]
+                    - cell "Positive" [ref=f2e610]
+                    - cell "2026-08-29" [ref=f2e612]
+                    - cell "Completed" [ref=f2e613]
+                    - cell "18" [ref=f2e615]
+                    - cell "17" [ref=f2e616]
+                  - row [ref=f2e617]:
+                    - cell [ref=f2e618]:
+                      - button "Expand Amazon" [ref=f2e619] [cursor=pointer]
+                    - cell "Amazon Bengaluru" [ref=f2e622]:
+                      - text: Amazon
+                      - generic [ref=f2e623]: Bengaluru
+                    - cell "suresh" [ref=f2e624]
+                    - cell "2027" [ref=f2e625]
+                    - cell "Day - 1" [ref=f2e626]
+                    - cell "Drive scheduled" [ref=f2e627]
+                    - cell "Positive" [ref=f2e629]
+                    - cell "2026-08-20" [ref=f2e631]
+                    - cell "Scheduled" [ref=f2e632]
+                    - cell "17" [ref=f2e634]
+                    - cell "17" [ref=f2e635]
+                  - row [ref=f2e636]:
+                    - cell [ref=f2e637]:
+                      - button "Expand Cognizant" [ref=f2e638] [cursor=pointer]
+                    - cell "Cognizant Chennai" [ref=f2e641]:
+                      - text: Cognizant
+                      - generic [ref=f2e642]: Chennai
+                    - cell "saisai" [ref=f2e643]
+                    - cell "2028" [ref=f2e644]
+                    - cell "Super Dream" [ref=f2e645]
+                    - cell "Negotiation" [ref=f2e646]
+                    - cell "Neutral" [ref=f2e648]
+                    - cell "2026-08-11" [ref=f2e650]
+                    - cell "Scheduled" [ref=f2e651]
+                    - cell "12" [ref=f2e653]
+                    - cell "11" [ref=f2e654]
+                  - row [ref=f2e655]:
+                    - cell [ref=f2e656]:
+                      - button "Expand Deloitte" [ref=f2e657] [cursor=pointer]
+                    - cell "Deloitte Pune" [ref=f2e660]:
+                      - text: Deloitte
+                      - generic [ref=f2e661]: Pune
+                    - cell "Ravi" [ref=f2e662]
+                    - cell "2027" [ref=f2e663]
+                    - cell "Marquee" [ref=f2e664]
+                    - cell "In talks" [ref=f2e665]
+                    - cell "Positive" [ref=f2e667]
+                    - cell "2026-08-02" [ref=f2e669]
+                    - cell "Scheduled" [ref=f2e670]
+                    - cell "8" [ref=f2e672]
+                    - cell "8" [ref=f2e673]
+                  - row [ref=f2e674]:
+                    - cell [ref=f2e675]:
+                      - button "Expand Wipro" [ref=f2e676] [cursor=pointer]
+                    - cell "Wipro Hyderabad" [ref=f2e679]:
+                      - text: Wipro
+                      - generic [ref=f2e680]: Hyderabad
+                    - cell "suresh" [ref=f2e681]
+                    - cell "2028" [ref=f2e682]
+                    - cell "Dream" [ref=f2e683]
+                    - cell "Outreach" [ref=f2e684]
+                    - cell "Positive" [ref=f2e686]
+                    - cell "2026-07-24" [ref=f2e688]
+                    - cell "Tentative" [ref=f2e689]
+                    - cell "7" [ref=f2e691]
+                    - cell "6" [ref=f2e692]
+                  - row [ref=f2e693]:
+                    - cell [ref=f2e694]:
+                      - button "Expand Accenture" [ref=f2e695] [cursor=pointer]
+                    - cell "Accenture Bengaluru" [ref=f2e698]:
+                      - text: Accenture
+                      - generic [ref=f2e699]: Bengaluru
+                    - cell "saisai" [ref=f2e700]
+                    - cell "2027" [ref=f2e701]
+                    - cell "Day - 1" [ref=f2e702]
+                    - cell "Prospect" [ref=f2e703]
+                    - cell "Neutral" [ref=f2e705]
+                    - cell "2026-07-15" [ref=f2e707]
+                    - cell "Not scheduled" [ref=f2e708]
+                    - cell "6" [ref=f2e710]
+                    - cell "6" [ref=f2e711]
+                  - row [ref=f2e712]:
+                    - cell [ref=f2e713]:
+                      - button "Expand Infosys" [ref=f2e714] [cursor=pointer]
+                    - cell "Infosys Infosys" [ref=f2e717]:
+                      - text: Infosys
+                      - generic [ref=f2e718]: Infosys
+                    - cell "suresh" [ref=f2e719]
+                    - cell "2028" [ref=f2e720]
+                    - cell "Marquee" [ref=f2e721]
+                    - cell "Discussion" [ref=f2e722]
+                    - cell "Positive" [ref=f2e724]
+                    - cell "—" [ref=f2e726]
+                    - cell "Tentative" [ref=f2e727]
+                    - cell "0" [ref=f2e729]
+                    - cell "0" [ref=f2e730]
