@@ -832,6 +832,30 @@ class DuplicateReviewIn(BaseModel):
     review_note: str | None = None
 
 
+def normalized_contact_value(value: Any) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def normalized_phone(value: Any) -> str:
+    return "".join(character for character in str(value or "") if character.isalnum())
+
+
+def contacts_match(left: dict[str, Any], right: ContactIn) -> bool:
+    left_email = normalized_contact_value(left.get("email"))
+    right_email = normalized_contact_value(right.email)
+    if left_email and right_email and left_email == right_email:
+        return True
+    left_phone = normalized_phone(left.get("phone"))
+    right_phone = normalized_phone(right.phone)
+    return bool(
+        normalized_contact_value(left.get("name"))
+        and normalized_contact_value(left.get("name")) == normalized_contact_value(right.name)
+        and left_phone
+        and right_phone
+        and left_phone == right_phone
+    )
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "vextra-ai-crm-api", "auth": "application-jwt", "database": "supabase"}
@@ -1000,37 +1024,11 @@ def list_organizations(user=Depends(require_roles("placement_manager", "universi
     return organizations
 
 
-@app.get("/api/organizations/check-duplicate")
-def check_duplicate(name: str = Query(min_length=1), user=Depends(require_roles("placement_manager"))):
-    query = db.table("organizations").select("id", count="exact").ilike("name", name.strip())
-    if user.get("university_id"):
-        query = query.eq("university_id", user["university_id"])
-    result = query.execute()
-    count = result.count or 0
-    return {"exists": count > 0, "count": count}
-
-
 @app.post("/api/organizations", status_code=201)
 def create_organization(payload: OrganizationIn, user=Depends(require_roles("placement_manager"))):
     category = university_rows("company_categories", user).eq("id", payload.category_id).limit(1).execute().data or []
     if not category:
         fail("Choose a company category configured by your University Admin", 400)
-    duplicate_rows = db.table("organizations").select("id,name,placement_manager_id").ilike("name", payload.name.strip()).eq("university_id", user.get("university_id")).limit(1).execute().data or []
-    if duplicate_rows:
-        pending_rows = db.table("duplicate_company_requests").select("id").eq("university_id", user.get("university_id")).eq("requested_by", user["id"]).eq("existing_organization_id", duplicate_rows[0]["id"]).eq("status", "pending").ilike("requested_name", payload.name.strip()).limit(1).execute().data or []
-        request_row = pending_rows[0] if pending_rows else db.table("duplicate_company_requests").insert({
-            "university_id": user.get("university_id"),
-            "requested_by": user["id"],
-            "existing_organization_id": duplicate_rows[0]["id"],
-            "requested_name": payload.name.strip(),
-            "requested_payload": payload.model_dump(),
-        }).execute().data[0]
-        if not pending_rows:
-            admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
-            notify_users([str(item["id"]) for item in admins], "duplicate_company_approval", "Duplicate company approval needed", f"{user.get('full_name', 'A team member')} requested to add {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
-            coordinators = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "coordinator").eq("status", "active").execute().data or []
-            notify_users([str(item["id"]) for item in coordinators], "duplicate_company_notice", "Duplicate company request submitted", f"A duplicate company request was sent to the university administrator for {payload.name}.", user.get("university_id"), "duplicate_company_request", request_row["id"], "Approvals")
-        fail("This organization already exists. An approval request was sent to the university administrator.", status.HTTP_409_CONFLICT, {"code": "duplicate_approval_required", "request_id": request_row["id"]})
     data = payload.model_dump()
     data.update({"placement_manager_id": user["id"], "university_id": user.get("university_id")})
     try:
@@ -1083,8 +1081,59 @@ def list_contacts(user=Depends(require_roles("placement_manager", "university_ad
 
 @app.post("/api/contacts", status_code=201)
 def create_contact(payload: ContactIn, user=Depends(require_roles("placement_manager"))):
-    if not scoped_rows("organizations", user, payload.organization_id).execute().data:
+    selected_organizations = scoped_rows("organizations", user, payload.organization_id).execute().data or []
+    if not selected_organizations:
         fail("Organization does not belong to the current manager", 403)
+    selected_organization = selected_organizations[0]
+    university_organizations = (db.table("organizations").select("id,name,placement_manager_id")
+        .eq("university_id", user.get("university_id"))
+        .execute().data or [])
+    company_name = normalized_contact_value(selected_organization.get("name"))
+    related_organization_ids = [
+        str(item["id"])
+        for item in university_organizations
+        if normalized_contact_value(item.get("name")) == company_name
+    ]
+    existing_contacts = (db.table("contacts").select("*")
+        .in_("organization_id", related_organization_ids)
+        .execute().data or []) if related_organization_ids else []
+    duplicate_contact = next((item for item in existing_contacts if contacts_match(item, payload)), None)
+    if duplicate_contact:
+        pending_query = (db.table("duplicate_contact_requests").select("*")
+            .eq("university_id", user.get("university_id"))
+            .eq("existing_contact_id", duplicate_contact["id"])
+            .eq("requested_organization_id", payload.organization_id)
+            .eq("status", "pending")
+            .order("created_at")
+            .limit(1))
+        pending_rows = pending_query.execute().data or []
+        request_row = pending_rows[0] if pending_rows else None
+        request_created = False
+        if not request_row:
+            try:
+                inserted_rows = db.table("duplicate_contact_requests").insert({
+                    "university_id": user.get("university_id"),
+                    "requested_by": user["id"],
+                    "existing_contact_id": duplicate_contact["id"],
+                    "existing_organization_id": duplicate_contact["organization_id"],
+                    "requested_organization_id": payload.organization_id,
+                    "requested_name": payload.name.strip(),
+                    "requested_payload": payload.model_dump(mode="json"),
+                }).execute().data or []
+                request_row = inserted_rows[0] if inserted_rows else None
+                request_created = bool(request_row)
+            except Exception as error:
+                if "duplicate_contact_requests" in str(error).lower() and ("schema cache" in str(error).lower() or "could not find" in str(error).lower() or "relation" in str(error).lower()):
+                    fail("Contact approvals are not enabled in the database yet. Apply the latest Supabase migration.", 503, {"code": "duplicate_contact_migration_required", "message": "Apply supabase/migrations/20260829000020_duplicate_contact_approvals.sql"})
+                # Concurrent submissions converge on the unique pending request.
+                pending_rows = pending_query.execute().data or []
+                if not pending_rows:
+                    raise
+                request_row = pending_rows[0]
+        if request_created:
+            admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
+            notify_users([str(item["id"]) for item in admins], "duplicate_contact_approval", "Duplicate contact approval needed", f"{user.get('full_name', 'A team member')} requested to add {payload.name.strip()} to {selected_organization.get('name', 'this company')}.", user.get("university_id"), "duplicate_contact_request", request_row["id"], "Contact Approvals")
+        fail("This contact already exists for the company. Approval was sent to the university administrator.", status.HTTP_409_CONFLICT, {"code": "duplicate_contact_approval_required", "request_id": request_row["id"]})
     created = db.table("contacts").insert({**payload.model_dump(), "placement_manager_id": user["id"]}).execute().data[0]
     record_audit(user, "created", "contact", created.get("id"), user.get("university_id"), {"organization_id": created.get("organization_id")})
     return created
@@ -2260,7 +2309,40 @@ def grant_access(payload: AccessGrantIn, user=Depends(require_roles("university_
 
 @app.get("/api/placement/duplicate-requests")
 def list_duplicate_requests(user=Depends(require_roles("university_admin"))):
-    return university_rows("duplicate_company_requests", user).order("created_at", desc=True).execute().data or []
+    raw_requests = university_rows("duplicate_company_requests", user).order("created_at", desc=True).execute().data or []
+    # Older deployments may already contain more than one pending row for the
+    # same company. Keep the oldest request visible until the cleanup migration
+    # is applied, so one business request never renders as two approvals.
+    requests = []
+    pending_keys = set()
+    for request in reversed(raw_requests):
+        key = (str(request.get("university_id")), str(request.get("existing_organization_id")))
+        if request.get("status") == "pending":
+            if key in pending_keys:
+                continue
+            pending_keys.add(key)
+        requests.append(request)
+    requests.sort(key=lambda request: request.get("created_at") or "", reverse=True)
+    if not requests:
+        return []
+    requester_ids = list({str(item["requested_by"]) for item in requests if item.get("requested_by")})
+    organization_ids = list({str(item["existing_organization_id"]) for item in requests if item.get("existing_organization_id")})
+    requesters = profile_list_for_user_ids(requester_ids)
+    requester_names = {str(item["id"]): item.get("full_name") for item in requesters}
+    organizations = db.table("organizations").select("id,name,placement_manager_id").in_("id", organization_ids).execute().data if organization_ids else []
+    organization_by_id = {str(item["id"]): item for item in organizations}
+    owner_ids = list({str(item["placement_manager_id"]) for item in organizations if item.get("placement_manager_id")})
+    owners = profile_list_for_user_ids(owner_ids)
+    owner_names = {str(item["id"]): item.get("full_name") for item in owners}
+    return [
+        {
+            **request,
+            "requested_by_name": requester_names.get(str(request.get("requested_by")), "Placement manager"),
+            "existing_organization_name": organization_by_id.get(str(request.get("existing_organization_id")), {}).get("name"),
+            "existing_organization_owner_name": owner_names.get(str(organization_by_id.get(str(request.get("existing_organization_id")), {}).get("placement_manager_id")), "Placement manager"),
+        }
+        for request in requests
+    ]
 
 
 @app.patch("/api/placement/duplicate-requests/{request_id}")
@@ -2276,6 +2358,22 @@ def review_duplicate_request(request_id: str, payload: DuplicateReviewIn, user=D
     if not updated_rows:
         fail("This duplicate company request has already been reviewed", status.HTTP_409_CONFLICT)
     updated = updated_rows[0]
+    # Consolidate any legacy duplicate pending rows for this same company when
+    # the visible request is reviewed. This prevents a second approval after
+    # an admin has already made the decision once.
+    sibling_rows = (db.table("duplicate_company_requests").select("id")
+        .eq("university_id", user["university_id"])
+        .eq("existing_organization_id", request_row["existing_organization_id"])
+        .eq("status", "pending")
+        .neq("id", request_id)
+        .execute().data or [])
+    if sibling_rows:
+        db.table("duplicate_company_requests").update({
+            "status": "rejected",
+            "review_note": "Consolidated into the reviewed approval request.",
+            "reviewed_by": user["id"],
+            "reviewed_at": now().isoformat(),
+        }).in_("id", [item["id"] for item in sibling_rows]).eq("status", "pending").execute()
     if payload.status == "approved":
         requested_payload = dict(request_row.get("requested_payload") or {})
         body = {key: requested_payload[key] for key in ("name", "category_id", "expected_ctc", "industry", "website", "city", "status", "notes") if key in requested_payload}
@@ -2285,4 +2383,104 @@ def review_duplicate_request(request_id: str, payload: DuplicateReviewIn, user=D
         db.table("organizations").insert(body).execute()
     record_audit(user, "reviewed", "duplicate_company_request", request_id, user["university_id"], {"status": payload.status, "requested_by": request_row.get("requested_by")})
     create_notification(request_row["requested_by"], "duplicate_company_reviewed", f"Duplicate company request {payload.status}", f"Your request for {request_row['requested_name']} was {payload.status}.", user["university_id"], "duplicate_company_request", request_id, "Organizations")
+    return updated
+
+
+@app.get("/api/placement/contact-requests")
+def list_duplicate_contact_requests(user=Depends(require_roles("university_admin"))):
+    try:
+        raw_requests = (university_rows("duplicate_contact_requests", user)
+            .order("created_at", desc=True).execute().data or [])
+    except Exception as error:
+        if "duplicate_contact_requests" in str(error).lower() and ("schema cache" in str(error).lower() or "could not find" in str(error).lower() or "relation" in str(error).lower()):
+            return []
+        raise
+    requests = []
+    pending_keys = set()
+    for request in reversed(raw_requests):
+        key = (
+            str(request.get("university_id")),
+            str(request.get("existing_contact_id")),
+            str(request.get("requested_organization_id")),
+        )
+        if request.get("status") == "pending":
+            if key in pending_keys:
+                continue
+            pending_keys.add(key)
+        requests.append(request)
+    requests.sort(key=lambda request: request.get("created_at") or "", reverse=True)
+    if not requests:
+        return []
+    requester_ids = list({str(item["requested_by"]) for item in requests if item.get("requested_by")})
+    contact_ids = list({str(item["existing_contact_id"]) for item in requests if item.get("existing_contact_id")})
+    organization_ids = list({
+        str(item[key])
+        for item in requests
+        for key in ("existing_organization_id", "requested_organization_id")
+        if item.get(key)
+    })
+    requesters = profile_list_for_user_ids(requester_ids)
+    requester_names = {str(item["id"]): item.get("full_name") for item in requesters}
+    contacts = db.table("contacts").select("id,name,email,phone,organization_id").in_("id", contact_ids).execute().data if contact_ids else []
+    contact_by_id = {str(item["id"]): item for item in contacts}
+    organizations = db.table("organizations").select("id,name,placement_manager_id").in_("id", organization_ids).execute().data if organization_ids else []
+    organization_by_id = {str(item["id"]): item for item in organizations}
+    owner_ids = list({str(item["placement_manager_id"]) for item in organizations if item.get("placement_manager_id")})
+    owners = profile_list_for_user_ids(owner_ids)
+    owner_names = {str(item["id"]): item.get("full_name") for item in owners}
+    return [
+        {
+            **request,
+            "requested_by_name": requester_names.get(str(request.get("requested_by")), "Placement manager"),
+            "existing_contact_name": contact_by_id.get(str(request.get("existing_contact_id")), {}).get("name"),
+            "existing_contact_email": contact_by_id.get(str(request.get("existing_contact_id")), {}).get("email"),
+            "existing_organization_name": organization_by_id.get(str(request.get("existing_organization_id")), {}).get("name"),
+            "existing_organization_owner_name": owner_names.get(str(organization_by_id.get(str(request.get("existing_organization_id")), {}).get("placement_manager_id")), "Placement manager"),
+            "requested_organization_name": organization_by_id.get(str(request.get("requested_organization_id")), {}).get("name"),
+        }
+        for request in requests
+    ]
+
+
+@app.patch("/api/placement/contact-requests/{request_id}")
+def review_duplicate_contact_request(request_id: str, payload: DuplicateReviewIn, user=Depends(require_roles("university_admin"))):
+    rows = university_rows("duplicate_contact_requests", user).eq("id", request_id).limit(1).execute().data or []
+    if not rows:
+        fail("Duplicate contact request not found", 404)
+    request_row = rows[0]
+    if request_row.get("status") != "pending":
+        fail("This duplicate contact request has already been reviewed", status.HTTP_409_CONFLICT)
+    if payload.status == "approved":
+        requested_organization = (db.table("organizations").select("id,university_id,placement_manager_id")
+            .eq("id", request_row["requested_organization_id"])
+            .eq("university_id", user["university_id"])
+            .limit(1).execute().data or [])
+        if not requested_organization or str(requested_organization[0].get("placement_manager_id")) != str(request_row.get("requested_by")):
+            fail("The requested organization is no longer owned by the requesting placement manager", status.HTTP_409_CONFLICT)
+    updates = {"status": payload.status, "reviewed_by": user["id"], "review_note": payload.review_note, "reviewed_at": now().isoformat()}
+    updated_rows = db.table("duplicate_contact_requests").update(updates).eq("id", request_id).eq("status", "pending").execute().data or []
+    if not updated_rows:
+        fail("This duplicate contact request has already been reviewed", status.HTTP_409_CONFLICT)
+    updated = updated_rows[0]
+    sibling_rows = (db.table("duplicate_contact_requests").select("id")
+        .eq("university_id", user["university_id"])
+        .eq("existing_contact_id", request_row["existing_contact_id"])
+        .eq("requested_organization_id", request_row["requested_organization_id"])
+        .eq("status", "pending")
+        .neq("id", request_id)
+        .execute().data or [])
+    if sibling_rows:
+        db.table("duplicate_contact_requests").update({
+            "status": "rejected",
+            "review_note": "Consolidated into the reviewed contact approval request.",
+            "reviewed_by": user["id"],
+            "reviewed_at": now().isoformat(),
+        }).in_("id", [item["id"] for item in sibling_rows]).eq("status", "pending").execute()
+    if payload.status == "approved":
+        requested_payload = dict(request_row.get("requested_payload") or {})
+        body = {key: requested_payload[key] for key in ("name", "designation", "email", "phone", "linkedin_url", "notes") if key in requested_payload}
+        body.update({"organization_id": request_row["requested_organization_id"], "placement_manager_id": request_row["requested_by"]})
+        db.table("contacts").insert(body).execute()
+    record_audit(user, "reviewed", "duplicate_contact_request", request_id, user["university_id"], {"status": payload.status, "requested_by": request_row.get("requested_by")})
+    create_notification(request_row["requested_by"], "duplicate_contact_reviewed", f"Duplicate contact request {payload.status}", f"Your request to add {request_row['requested_name']} was {payload.status}.", user["university_id"], "duplicate_contact_request", request_id, "Contacts")
     return updated

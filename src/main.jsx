@@ -430,7 +430,7 @@ function Workspace({ role, user, profile, onLogout }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [success, setSuccess] = useState(""),
-    [duplicateOrg, setDuplicateOrg] = useState(null),
+    [duplicateContact, setDuplicateContact] = useState(null),
     [searchOpen, setSearchOpen] = useState(false),
     [searchQuery, setSearchQuery] = useState(""),
     [searchResults, setSearchResults] = useState([]),
@@ -455,7 +455,7 @@ function Workspace({ role, user, profile, onLogout }) {
     [editingStage, setEditingStage] = useState(null),
     [editingUser, setEditingUser] = useState(null),
     [editingUniversity, setEditingUniversity] = useState(null),
-    [placementData, setPlacementData] = useState({ seasons: [], categories: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, duplicates: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
+    [placementData, setPlacementData] = useState({ seasons: [], categories: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, contactApprovals: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
     [loaded, setLoaded] = useState(false);
   const mode = "company";
   const copy = workspaceCopy.company;
@@ -467,7 +467,7 @@ function Workspace({ role, user, profile, onLogout }) {
   const visibleReports = reports;
   const visibleCards = cards;
   const loadPlacementData = async () => {
-    const [analytics, metrics, seasons, categories, cities, assignments, targets, duplicates, access, settings] = await Promise.all([
+    const [analytics, metrics, seasons, categories, cities, assignments, targets, contactApprovals, access, settings] = await Promise.all([
       analyticsViewer ? apiFetch("/api/placement/analytics") : Promise.resolve(null),
       apiFetch("/api/placement/metrics"),
       apiFetch("/api/placement/seasons"),
@@ -475,7 +475,7 @@ function Workspace({ role, user, profile, onLogout }) {
       apiFetch("/api/placement/cities"),
       apiFetch("/api/placement/assignments"),
       apiFetch("/api/placement/targets"),
-      universityAdmin ? apiFetch("/api/placement/duplicate-requests") : Promise.resolve([]),
+      universityAdmin ? apiFetch("/api/placement/contact-requests") : Promise.resolve([]),
       universityAdmin ? apiFetch("/api/placement/access") : supervisor ? apiFetch("/api/placement/access/me") : Promise.resolve(null),
       apiFetch("/api/placement/settings"),
     ]);
@@ -488,7 +488,7 @@ function Workspace({ role, user, profile, onLogout }) {
       cities: cities || [],
       assignments: assignments || [],
       targets: targets || [],
-      duplicates: duplicates || [],
+      contactApprovals: contactApprovals || [],
       access: access || null,
       settings: settings || { coordinator_target_entry_enabled: false },
     }));
@@ -501,7 +501,7 @@ function Workspace({ role, user, profile, onLogout }) {
   const nav = superAdmin
     ? ["Overview", "Universities", "Users"]
       : universityAdmin
-      ? ["Overview", "Team", "Direct Team", "Placement Setup", "Analytics", "Approvals", organizationNav, peopleNav, "Meeting Reports"]
+      ? ["Overview", "Team", "Direct Team", "Placement Setup", "Analytics", "Contact Approvals", organizationNav, peopleNav, "Meeting Reports"]
       : supervisor
         ? coordinatorNav
         : dataAnalyst
@@ -692,16 +692,10 @@ function Workspace({ role, user, profile, onLogout }) {
     apiFetch("/api/organizations", { method: "POST", body: JSON.stringify(payload) })
       .then((data) => {
         setOrgs((prev) => [...prev, data]);
-        setDuplicateOrg(null);
         setModal(null);
         showSuccess("Organization added.");
       })
-      .catch((err) => {
-        if (err.status === 409 && ["duplicate_organization", "duplicate_approval_required"].includes(err.payload?.code)) {
-          setDuplicateOrg({ name: payload.name, requestId: err.payload?.request_id });
-          setError("");
-        } else setError(err.message);
-      })
+      .catch((err) => setError(err.message))
       .finally(() => setBusy(false));
   };
   const addContact = (e) => {
@@ -729,7 +723,21 @@ function Workspace({ role, user, profile, onLogout }) {
         .finally(() => setBusy(false));
       return;
     }
-    save("contacts", payload, setContacts);
+    setBusy(true);
+    apiFetch("/api/contacts", { method: "POST", body: JSON.stringify(payload) })
+      .then((data) => {
+        setContacts((prev) => [...prev, data]);
+        setDuplicateContact(null);
+        setModal(null);
+        showSuccess("Contact added.");
+      })
+      .catch((err) => {
+        if (err.status === 409 && err.payload?.code === "duplicate_contact_approval_required") {
+          setDuplicateContact({ name: payload.name, requestId: err.payload?.request_id });
+          setError("");
+        } else setError(err.message);
+      })
+      .finally(() => setBusy(false));
   };
   const addReport = async (e) => {
     e.preventDefault();
@@ -1101,7 +1109,7 @@ function Workspace({ role, user, profile, onLogout }) {
       ) : universityAdmin ? (
         <TeamDashboard summary={teamSummary} analytics={placementData.analytics} masked={false} excludeUserId={user?.id} />
       ) : dataAnalyst ? (
-        <><CategoryReference categories={placementData.categories} /><PlacementAnalytics analytics={placementData.analytics} data={placementData} role={role} /></>
+        <><CategoryReference categories={placementData.categories} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
       ) : (
         <div className="role-dashboard placement-manager-dashboard">
           <DashboardFlowHeader role="PLACEMENT MANAGER WORKSPACE" title="Plan the target, move the pipeline, close the loop" description="Use this page in order: check your assigned targets, follow the university category rules, then work through today’s pipeline actions." steps={["Targets", "Category rules", "Pipeline", "Follow-through"]} />
@@ -1134,11 +1142,11 @@ function Workspace({ role, user, profile, onLogout }) {
     ) : universityAdmin && active === "Targets" ? (
       <TargetEntryPanel data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : active === "Analytics" && analyticsViewer ? (
-      <>{role !== "data_analyst" && <TargetProgressPanel data={placementData} users={teamSummary?.users || [...managers, profile].filter(Boolean)} />}<CategoryReference categories={placementData.categories} /><PlacementCategorySummary analytics={placementData.analytics} /><PlacementAnalytics analytics={placementData.analytics} data={placementData} role={role} /></>
+      <>{role !== "data_analyst" && <TargetProgressPanel data={placementData} users={teamSummary?.users || [...managers, profile].filter(Boolean)} />}<CategoryReference categories={placementData.categories} /><PlacementCategorySummary analytics={placementData.analytics} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
     ) : supervisor && (active === "Placement Tracker" || active === "Placement Progress" || active === "Placement Updates" || active === "Placement Metrics") ? (
       <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} canEdit={supervisor} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} /></>
-    ) : active === "Approvals" ? (
-      <DuplicateApprovals requests={placementData.duplicates} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+    ) : universityAdmin && active === "Contact Approvals" ? (
+      <ContactApprovals requests={placementData.contactApprovals} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : active === organizationNav ? (
       <Organizations
         orgs={visibleOrgs}
@@ -1304,7 +1312,7 @@ function Workspace({ role, user, profile, onLogout }) {
       </main>
       {searchOpen && <GlobalSearch query={searchQuery} setQuery={setSearchQuery} results={searchResults} loading={searchLoading} onClose={() => setSearchOpen(false)} onSelect={(item) => { setSearchOpen(false); if (item.href && nav.includes(item.href)) setActive(item.href); }} />}
       {modal === "org" && (
-        <Modal title={editingOrg ? `Edit ${copy.organization.toLowerCase()}` : `Add ${copy.organization.toLowerCase()}`} onClose={() => { setModal(null); setEditingOrg(null); setDuplicateOrg(null); }}>
+        <Modal title={editingOrg ? `Edit ${copy.organization.toLowerCase()}` : `Add ${copy.organization.toLowerCase()}`} onClose={() => { setModal(null); setEditingOrg(null); }}>
           <form key={editingOrg?.id || "new-org"} onSubmit={addOrg}>
             <Field
               label={`${copy.organization} name`}
@@ -1353,21 +1361,12 @@ function Workspace({ role, user, profile, onLogout }) {
                 placeholder="Relationship context..."
               />
             </label>
-            {duplicateOrg && (
-              <div className="warning-banner">
-                <b>Duplicate approval request submitted</b>
-                <p>{duplicateOrg.name} already exists under your university. The request has been sent to the University Admin for review. No duplicate organization was added.</p>
-                <div className="form-actions">
-                  <button type="button" className="btn primary" onClick={() => { setDuplicateOrg(null); setModal(null); }}>Done</button>
-                </div>
-              </div>
-            )}
-          <FormActions onClose={() => setModal(null)} busy={busy} showCancel={!profile?.must_change_password} />
+          <FormActions onClose={() => setModal(null)} busy={busy} />
           </form>
         </Modal>
       )}
       {modal === "contact" && (
-        <Modal title={editingContact ? `Edit ${copy.person.toLowerCase()}` : `Add ${copy.person.toLowerCase()}`} onClose={() => { setModal(null); setEditingContact(null); }}>
+        <Modal title={editingContact ? `Edit ${copy.person.toLowerCase()}` : `Add ${copy.person.toLowerCase()}`} onClose={() => { setModal(null); setEditingContact(null); setDuplicateContact(null); }}>
           <form key={editingContact?.id || "new-contact"} onSubmit={addContact}>
             <div className="form-grid">
               <Field label="Full name" name="name" defaultValue={editingContact?.name || ""} placeholder="Person name" />
@@ -1406,7 +1405,15 @@ function Workspace({ role, user, profile, onLogout }) {
                 placeholder="Contact context..."
               />
             </label>
-            <FormActions onClose={() => setModal(null)} busy={busy} />
+            {duplicateContact ? (
+              <div className="warning-banner contact-approval-warning">
+                <b>Contact approval request submitted</b>
+                <p>{duplicateContact.name} already exists for this company. The contact was not added and has been sent to the University Admin for approval.</p>
+                <div className="form-actions">
+                  <button type="button" className="btn primary" onClick={() => { setDuplicateContact(null); setModal(null); }}>Done</button>
+                </div>
+              </div>
+            ) : <FormActions onClose={() => setModal(null)} busy={busy} />}
           </form>
         </Modal>
       )}
@@ -1713,7 +1720,7 @@ function Workspace({ role, user, profile, onLogout }) {
             <Field label="Current password" type="password" name="current_password" autoComplete="current-password" />
             <Field label="New password" type="password" name="new_password" minLength="8" autoComplete="new-password" />
             <Field label="Confirm new password" type="password" name="confirm_password" minLength="8" autoComplete="new-password" />
-            <FormActions onClose={() => setModal(null)} busy={busy} />
+            <FormActions onClose={() => setModal(null)} busy={busy} showCancel={!profile?.must_change_password} />
           </form>
         </Modal>
       )}
@@ -2820,9 +2827,9 @@ function TargetEntryPanel({ data, users, onRefresh, onError, onSuccess }) {
   return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">COORDINATOR WORKSPACE</p><h2>Set placement targets</h2><p className="muted">Set targets for team members in your reporting scope by season and company category.</p></div></div><form className="panel form-card" onSubmit={save}><div className="form-grid"><Select label="Season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.academic_year}</option>)}</Select><Select label="Team member" name="user_id"><option value="">Choose team member</option>{(users || []).filter((item) => ["coordinator", "placement_manager"].includes(item.role)).map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</Select></div><Select label="Company category" name="category_id"><option value="">All categories</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><div className="form-grid">{[["companies_target", "Companies"], ["drives_target", "Drives"], ["offers_target", "Offers"], ["students_placed_target", "Placed students"], ["students_joined_target", "Joined students"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue="0" />)}</div><button className="btn primary" disabled={busy}>Save target</button></form></div>;
 }
 
-function DuplicateApprovals({ requests, onRefresh, onError, onSuccess }) {
-  const review = async (id, status) => { try { await apiFetch(`/api/placement/duplicate-requests/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await onRefresh(); onSuccess(`Request ${status}.`); } catch (e) { onError(e.message); } };
-  return <div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">CONTROLLED COLLABORATION</p><h2>Duplicate company approvals</h2><p className="muted">Only a University Admin can approve a second company record.</p></div></div><table><thead><tr><th>Requested company</th><th>Requested by</th><th>Status</th><th>Actions</th></tr></thead><tbody>{(requests || []).map((request) => <tr key={request.id}><td><b>{request.requested_name}</b></td><td>{request.requested_by}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <><button className="text-btn" onClick={() => review(request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review(request.id, "rejected")}>Reject</button></>}</td></tr>)}</tbody></table>{!requests?.length && <div className="empty-state"><h3>No approval requests</h3><p className="muted">Duplicate company requests will appear here.</p></div>}</div>;
+function ContactApprovals({ requests, onRefresh, onError, onSuccess }) {
+  const review = async (id, status) => { try { await apiFetch(`/api/placement/contact-requests/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await onRefresh(); onSuccess(`Contact request ${status}.`); } catch (e) { onError(e.message); } };
+  return <div className="panel table-panel duplicate-approvals-panel contact-approvals-panel"><div className="panel-head"><div><p className="eyebrow">CONTACT COLLABORATION</p><h2>Contact approvals</h2><p className="muted">A contact already linked to this company requires University Admin approval. One pending request is kept per existing contact and requested company.</p></div></div><table className="duplicate-approvals-table contact-approvals-table"><thead><tr><th>Requested contact</th><th>Existing contact</th><th>Existing owner</th><th>Requested company</th><th>Requested by</th><th>Status</th><th>Actions</th></tr></thead><tbody>{(requests || []).map((request) => <tr key={request.id}><td><b>{request.requested_name}</b><small>{request.requested_payload?.email || "Contact details submitted"}</small></td><td><b>{request.existing_contact_name || "Existing contact"}</b><small>{request.existing_contact_email || "Contact details protected"}</small></td><td>{request.existing_organization_owner_name || "Placement manager"}</td><td>{request.requested_organization_name || request.existing_organization_name || "Company"}</td><td>{request.requested_by_name || request.requested_by}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <div className="approval-actions"><button className="text-btn" onClick={() => review(request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review(request.id, "rejected")}>Reject</button></div>}</td></tr>)}</tbody></table>{!requests?.length && <div className="empty-state"><h3>No contact approval requests</h3><p className="muted">Duplicate contact requests will appear here.</p></div>}</div>;
 }
 
 function AccessGrantPanel({ users, grants = [], onRefresh, onError, onSuccess }) {
