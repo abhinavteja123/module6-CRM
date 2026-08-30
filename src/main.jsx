@@ -446,7 +446,10 @@ function Workspace({ role, user, profile, onLogout }) {
     [cards, setCards] = useState([]),
     [stages, setStages] = useState([]),
     [managers, setManagers] = useState([]),
-    [universities, setUniversities] = useState([]),
+     [universities, setUniversities] = useState([]),
+     [contracts, setContracts] = useState([]),
+     [contractsUniversity, setContractsUniversity] = useState(null),
+     [drillThrough, setDrillThrough] = useState(null),
     [teamSummary, setTeamSummary] = useState(null),
     [editingReport, setEditingReport] = useState(null),
     [editingOrg, setEditingOrg] = useState(null),
@@ -501,9 +504,9 @@ function Workspace({ role, user, profile, onLogout }) {
   if (coordinatorHasAccess("contacts")) coordinatorNav.push(peopleNav);
   if (coordinatorHasAccess("meeting_reports")) coordinatorNav.push("Meeting Reports");
   const nav = superAdmin
-    ? ["Overview", "Universities", "Users"]
+    ? ["Overview", "Universities", "Contracts", "Users"]
       : universityAdmin
-      ? ["Overview", "Team", "Direct Team", "Placement Setup", "Analytics", "Contact Approvals", organizationNav, peopleNav, "Meeting Reports"]
+      ? ["Overview", "Team", "Direct Team", "Team Mapping", "Placement Setup", "Analytics", "Contact Approvals", organizationNav, peopleNav, "Meeting Reports"]
       : supervisor
         ? coordinatorNav
         : dataAnalyst
@@ -530,6 +533,7 @@ function Workspace({ role, user, profile, onLogout }) {
       setLoaded(true);
     }
   };
+  const openDrillThrough = (details) => setDrillThrough({ ...details, rows: details.rows || [], columns: details.columns || [] });
   const refreshManagers = async () => {
     try {
       if (superAdmin) {
@@ -937,6 +941,7 @@ function Workspace({ role, user, profile, onLogout }) {
       );
       showSuccess("Account deactivated.");
     } catch (e) {
+      if (e.payload?.code === "COORDINATOR_REASSIGNMENT_REQUIRED") setActive("Team Mapping");
       setError(e.message);
     }
   };
@@ -1101,34 +1106,38 @@ function Workspace({ role, user, profile, onLogout }) {
   const content =
     active === "Overview" ? (
       superAdmin ? (
-        <PlatformOverview universities={universities} users={managers} />
+         <PlatformOverview universities={universities} users={managers} onDrillThrough={openDrillThrough} />
       ) : supervisor ? (
         <div className="role-dashboard coordinator-dashboard">
-          <CoordinatorOverviewDashboard summary={teamSummary} excludeUserId={user?.id} />
+           <CoordinatorOverviewDashboard summary={teamSummary} organizations={orgs} contacts={contacts} reports={reports} cards={cards} excludeUserId={user?.id} onDrillThrough={openDrillThrough} />
         </div>
       ) : universityAdmin ? (
-        <TeamDashboard summary={teamSummary} analytics={placementData.analytics} masked={false} excludeUserId={user?.id} />
+         <TeamDashboard summary={teamSummary} analytics={placementData.analytics} organizations={orgs} contacts={contacts} reports={reports} cards={cards} metrics={placementData.metrics} masked={false} excludeUserId={user?.id} onDrillThrough={openDrillThrough} />
       ) : dataAnalyst ? (
-        <><CategoryReference categories={placementData.categories} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
+         <><CategoryReference categories={placementData.categories} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} onDrillThrough={openDrillThrough} /></>
       ) : (
         <div className="role-dashboard placement-manager-dashboard">
-          <PlacementManagerOverviewDashboard orgs={visibleOrgs} contacts={visibleContacts} reports={visibleReports} cards={cards} stages={stages} metrics={placementData.metrics} />
+           <PlacementManagerOverviewDashboard orgs={visibleOrgs} contacts={visibleContacts} reports={visibleReports} cards={cards} stages={stages} metrics={placementData.metrics} onDrillThrough={openDrillThrough} />
         </div>
       )
-    ) : superAdmin && active === "Universities" ? (
+     ) : superAdmin && active === "Universities" ? (
       <UniversityDirectory universities={universities} users={managers} onAdd={() => setModal("university")} onEdit={(university) => { setEditingUniversity(university); setModal("edit-university"); }} onToggleStatus={updateUniversity} />
+    ) : superAdmin && active === "Contracts" ? (
+      <UniversityContracts universities={universities} selectedUniversity={contractsUniversity} contracts={contracts} onSelectUniversity={async (university) => { setContractsUniversity(university); setBusy(true); try { setContracts(await apiFetch(`/api/admin/universities/${university.id}/contracts`)); } catch (err) { setError(err.message); } finally { setBusy(false); } }} onContractsChange={setContracts} onError={setError} onSuccess={showSuccess} />
     ) : superAdmin && active === "Users" ? (
       <RoleUsers users={managers} universities={universities} currentUserId={user?.id} superAdmin onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} onEditUniversity={(university) => { setEditingUniversity(university); setModal("edit-university"); }} />
     ) : (universityAdmin || supervisor) && active === "Team" ? (
       <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} onAdd={universityAdmin || role === "coordinator" ? () => setModal("user") : undefined} onDeactivate={universityAdmin || role === "coordinator" ? deactivate : undefined} onReactivate={universityAdmin || role === "coordinator" ? reactivate : undefined} onEdit={universityAdmin || role === "coordinator" ? (member) => { setEditingUser(member); setModal("edit-user"); } : undefined} onRemove={role === "coordinator" ? removeManager : undefined} hierarchy={false} masked={supervisor} />
     ) : universityAdmin && active === "Direct Team" ? (
       <RoleUsers users={teamSummary?.users || managers} currentUserId={user?.id} directReportsTo={user?.id} onAdd={() => setModal("user")} onDeactivate={deactivate} onReactivate={reactivate} onEdit={(member) => { setEditingUser(member); setModal("edit-user"); }} hierarchy={false} />
+    ) : universityAdmin && active === "Team Mapping" ? (
+      <TeamMappingPanel users={teamSummary?.users || managers} universityAdminId={user?.id} universityAdminName={user?.full_name} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : active === "Placement Setup" ? (
       <PlacementSetupWizardV2 data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : universityAdmin && active === "Targets" ? (
       <TargetEntryPanel data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
-    ) : active === "Analytics" && analyticsViewer ? (
-      <><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} /></>
+       ) : active === "Analytics" && analyticsViewer ? (
+       <><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} onDrillThrough={openDrillThrough} /></>
     ) : supervisor && (active === "Placement Tracker" || active === "Placement Progress" || active === "Placement Updates" || active === "Placement Metrics") ? (
       <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} canEdit={supervisor} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} /></>
     ) : universityAdmin && active === "Contact Approvals" ? (
@@ -1225,7 +1234,7 @@ function Workspace({ role, user, profile, onLogout }) {
             >
               {n === "Overview" || n === "Analytics" ? (
                 <LayoutDashboard size={18} />
-              ) : n === "Placement Managers" || n === "Users" || n === "Team" || n === "Direct Team" ? (
+              ) : n === "Placement Managers" || n === "Users" || n === "Team" || n === "Direct Team" || n === "Team Mapping" ? (
                 <Users size={18} />
               ) : n === "Organizations" || n === "Universities" ? (
                 <Building2 size={18} />
@@ -1297,6 +1306,7 @@ function Workspace({ role, user, profile, onLogout }) {
         </section>
       </main>
       {searchOpen && <GlobalSearch query={searchQuery} setQuery={setSearchQuery} results={searchResults} loading={searchLoading} onClose={() => setSearchOpen(false)} onSelect={(item) => { setSearchOpen(false); if (item.href && nav.includes(item.href)) setActive(item.href); }} />}
+      {drillThrough && <DrillThroughDrawer {...drillThrough} onClose={() => setDrillThrough(null)} />}
       {modal === "org" && (
         <Modal title={editingOrg ? `Edit ${copy.organization.toLowerCase()}` : `Add ${copy.organization.toLowerCase()}`} onClose={() => { setModal(null); setEditingOrg(null); }}>
           <form key={editingOrg?.id || "new-org"} onSubmit={addOrg}>
@@ -1970,6 +1980,49 @@ function RoleUsers({ users, universities = [], currentUserId, directReportsTo, o
     </div> : <div className="panel table-panel"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Reports to</th><th /></tr></thead><tbody>{sortAccounts(filteredUsers).map((item) => <tr key={item.id}><td><b>{item.full_name}</b></td><td>{item.email}</td><td>{roleLabel(item.role)}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td><td>{item.reports_to_name || (item.reports_to ? names.get(String(item.reports_to)) || "Assigned manager" : "—")}</td><td>{accountActions(item)}</td></tr>)}</tbody></table>{!filteredUsers.length && <div className="empty-state"><p className="muted">No accounts match the current filters.</p></div>}</div>}
     {superAdmin && selectedAccount && <AccountDetailDrawer account={selectedAccount} universities={universities} names={names} onClose={() => setSelectedAccount(null)} />}
   </>;
+}
+
+function TeamMappingPanel({ users, universityAdminId, universityAdminName, onRefresh, onError, onSuccess }) {
+  const coordinators = users.filter((item) => item.role === "coordinator");
+  const placementManagers = users.filter((item) => item.role === "placement_manager");
+  const directAdmin = { id: universityAdminId, full_name: universityAdminName || "University Admin", role: "university_admin", status: "active" };
+  const activeCoordinators = coordinators.filter((item) => item.status === "active");
+  const reportingTargets = [directAdmin, ...activeCoordinators];
+  const reportingNames = new Map(reportingTargets.map((item) => [String(item.id), item.full_name]));
+  const [assignments, setAssignments] = useState({});
+  const [savingId, setSavingId] = useState(null);
+
+  useEffect(() => {
+    setAssignments(Object.fromEntries(placementManagers.map((manager) => [String(manager.id), String(manager.reports_to || "")])));
+  }, [users]);
+
+  const saveMapping = async (manager) => {
+    const reportsTo = assignments[String(manager.id)];
+    if (!reportsTo) {
+      onError("Choose the university administrator or an active coordinator before saving the mapping.");
+      return;
+    }
+    setSavingId(manager.id);
+    try {
+      await apiFetch(`/api/team/users/${manager.id}/reporting-line`, {
+        method: "PATCH",
+        body: JSON.stringify({ reports_to: reportsTo }),
+      });
+      await onRefresh();
+      onSuccess(`${manager.full_name} is now mapped to ${reportingNames.get(String(reportsTo)) || "the selected reporting manager"}.`);
+    } catch (error) {
+      onError(error.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const needsMapping = placementManagers.filter((manager) => {
+    const target = reportingTargets.find((item) => String(item.id) === String(manager.reports_to));
+    return !target || target.status !== "active";
+  }).length;
+
+  return <div className="dashboard"><div className="toolbar"><div><p className="eyebrow">TEAM STRUCTURE</p><h2>Coordinator mapping</h2><p className="muted">Choose whether each placement manager reports directly to the university administrator or to an active coordinator. CRM records and placement history remain with the manager.</p></div></div><div className="panel mapping-summary"><div><b>{activeCoordinators.length} active coordinators</b><span>available for assignment</span></div><div><b>{needsMapping} managers need attention</b><span>under an inactive or missing reporting manager</span></div></div><div className="panel table-panel"><div className="panel-head"><div><p className="eyebrow">PLACEMENT MANAGERS</p><h3>Reporting lines</h3><span className="muted">Direct assignment to the university administrator is allowed. Reassign managers before removing a coordinator.</span></div></div><div className="team-table-scroll"><table><thead><tr><th>Placement manager</th><th>Status</th><th>Current reporting line</th><th>Assign under</th><th>Action</th></tr></thead><tbody>{placementManagers.map((manager) => { const currentTarget = reportingTargets.find((item) => String(item.id) === String(manager.reports_to)) || coordinators.find((item) => String(item.id) === String(manager.reports_to)); const selectedTarget = assignments[String(manager.id)] || ""; const changed = selectedTarget !== String(manager.reports_to || ""); return <tr key={manager.id}><td><b>{manager.full_name}</b><small>{manager.email}</small></td><td><span className={`badge ${manager.status}`}>{manager.status}</span></td><td>{currentTarget ? <span>{currentTarget.full_name}<small>{currentTarget.role === "university_admin" ? "University administrator" : currentTarget.status === "active" ? "Active coordinator" : "Inactive coordinator"}</small></span> : <span className="danger-number">Not mapped</span>}</td><td><select className="filter mapping-select" value={selectedTarget} onChange={(event) => setAssignments((current) => ({ ...current, [String(manager.id)]: event.target.value }))} disabled={!reportingTargets.length || savingId === manager.id} aria-label={`Reporting line for ${manager.full_name}`}><option value="">Choose reporting line</option>{reportingTargets.map((target) => <option key={target.id} value={target.id}>{target.full_name}{target.role === "university_admin" ? " · University Admin" : " · Coordinator"}</option>)}{currentTarget && currentTarget.status !== "active" && <option value={currentTarget.id} disabled>{currentTarget.full_name} · inactive</option>}</select></td><td><button className="btn primary" onClick={() => saveMapping(manager)} disabled={!changed || savingId === manager.id || !selectedTarget}>{savingId === manager.id ? "Saving…" : "Save mapping"}</button></td></tr>; })}</tbody></table></div>{!placementManagers.length && <div className="empty-state"><h3>No placement managers found</h3><p className="muted">Create a placement manager account first.</p></div>}</div></div>;
 }
 
 function AccountDetailDrawer({ account, universities, names, onClose }) {

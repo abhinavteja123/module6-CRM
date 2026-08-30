@@ -15,7 +15,7 @@ import bcrypt
 import httpx
 import jwt
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -99,6 +99,10 @@ class ThreadSafeSupabaseClient:
         with self._lock:
             builder = self._client.table(table_name)
         return ThreadSafeRequestBuilder(builder, self._lock)
+
+    def storage_bucket(self, bucket_name: str):
+        with self._lock:
+            return self._client.storage.from_(bucket_name)
 
 
 db: ThreadSafeSupabaseClient = ThreadSafeSupabaseClient(create_client(settings.supabase_url, settings.supabase_service_role_key))
@@ -257,9 +261,19 @@ FULL_CRM_PERMISSIONS = {area: True for area in CRM_ACCESS_AREAS}
 
 
 def crm_grant(user: dict[str, Any]) -> dict[str, Any] | None:
+    # Access checks are applied once per returned row in the coordinator
+    # masking paths. Cache the request-local grant to avoid an identical
+    # database round trip for every organization/contact/report.
+    if "_crm_grant_loaded" in user:
+        return user.get("_crm_grant")
     if user.get("role") in {"university_admin", "placement_manager"}:
-        return {"access_level": "full", "permissions": FULL_CRM_PERMISSIONS}
+        grant = {"access_level": "full", "permissions": FULL_CRM_PERMISSIONS}
+        user["_crm_grant_loaded"] = True
+        user["_crm_grant"] = grant
+        return grant
     if user.get("role") not in {"coordinator", "data_analyst"}:
+        user["_crm_grant_loaded"] = True
+        user["_crm_grant"] = None
         return None
     rows = (db.table("placement_access_grants")
         .select("access_level,permissions")
@@ -267,7 +281,10 @@ def crm_grant(user: dict[str, Any]) -> dict[str, Any] | None:
         .eq("granted_to", user["id"])
         .eq("scope", "crm")
         .limit(1).execute().data or [])
-    return rows[0] if rows else None
+    grant = rows[0] if rows else None
+    user["_crm_grant_loaded"] = True
+    user["_crm_grant"] = grant
+    return grant
 
 
 def has_crm_area_access(user: dict[str, Any], area: str, organization_id: str | None = None) -> bool:
@@ -755,11 +772,45 @@ class UniversityUpdateIn(BaseModel):
     max_accounts: int | None = Field(default=None, ge=1)
 
 
+class UniversityContractIn(BaseModel):
+    contract_reference: str | None = Field(default=None, max_length=120)
+    status: Literal["draft", "active", "renewed", "expired", "cancelled"] = "active"
+    total_contract_value: float = Field(default=0, ge=0)
+    currency: str = Field(default="INR", min_length=3, max_length=3)
+    work_order_date: date | None = None
+    contract_start_date: date | None = None
+    contract_end_date: date | None = None
+    invoice_number: str | None = Field(default=None, max_length=120)
+    invoice_date: date | None = None
+    payment_status: Literal["not_received", "partial", "received", "overdue"] = "not_received"
+    payment_received_date: date | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class UniversityContractUpdateIn(BaseModel):
+    contract_reference: str | None = Field(default=None, max_length=120)
+    status: Literal["draft", "active", "renewed", "expired", "cancelled"] | None = None
+    total_contract_value: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    work_order_date: date | None = None
+    contract_start_date: date | None = None
+    contract_end_date: date | None = None
+    invoice_number: str | None = Field(default=None, max_length=120)
+    invoice_date: date | None = None
+    payment_status: Literal["not_received", "partial", "received", "overdue"] | None = None
+    payment_received_date: date | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+
 class TeamUserUpdateIn(BaseModel):
     full_name: str | None = Field(default=None, min_length=1)
     email: str | None = Field(default=None, min_length=3)
     password: str | None = Field(default=None, min_length=8)
     status: Literal["active", "inactive"] | None = None
+
+
+class ReportingLineIn(BaseModel):
+    reports_to: str = Field(min_length=1)
 
 
 class SeasonIn(BaseModel):
@@ -1584,6 +1635,136 @@ def update_university(university_id: str, payload: UniversityUpdateIn, user=Depe
     return result.data[0]
 
 
+CONTRACT_DOCUMENT_BUCKET = "university-contract-documents"
+CONTRACT_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024
+CONTRACT_DOCUMENT_TYPES = {"work_order", "invoice", "supporting"}
+CONTRACT_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+}
+CONTRACT_DOCUMENT_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
+
+def _contract_university(university_id: str) -> dict[str, Any]:
+    university = db.table("universities").select("id,name").eq("id", university_id).limit(1).execute().data or []
+    if not university:
+        fail("University not found", 404)
+    return university[0]
+
+
+def _contract_rows_with_documents(contract_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not contract_rows:
+        return []
+    contract_ids = [str(row["id"]) for row in contract_rows]
+    documents = db.table("university_contract_documents").select("*").in_("contract_id", contract_ids).order("created_at", desc=True).execute().data or []
+    documents_by_contract: dict[str, list[dict[str, Any]]] = {}
+    for document in documents:
+        documents_by_contract.setdefault(str(document["contract_id"]), []).append(document)
+    return [{**row, "documents": documents_by_contract.get(str(row["id"]), [])} for row in contract_rows]
+
+
+def _contract_storage_document_url(storage_path: str) -> str:
+    signed = db.storage_bucket(CONTRACT_DOCUMENT_BUCKET).create_signed_url(storage_path, 15 * 60)
+    return signed.get("signedURL") or signed.get("signedUrl") or ""
+
+
+@app.get("/api/admin/universities/{university_id}/contracts")
+def list_university_contracts(university_id: str, user=Depends(require_roles("super_admin"))):
+    _contract_university(university_id)
+    rows = db.table("university_contracts").select("*").eq("university_id", university_id).order("created_at", desc=True).execute().data or []
+    return _contract_rows_with_documents(rows)
+
+
+@app.post("/api/admin/universities/{university_id}/contracts", status_code=201)
+def create_university_contract(university_id: str, payload: UniversityContractIn, user=Depends(require_roles("super_admin"))):
+    university = _contract_university(university_id)
+    values = {
+        **payload.model_dump(mode="json"),
+        "university_id": university_id,
+        "created_by": user["id"],
+        "updated_by": user["id"],
+    }
+    created = db.table("university_contracts").insert(values).execute().data[0]
+    record_audit(user, "created", "university_contract", created.get("id"), university_id, {"university_name": university.get("name"), "status": created.get("status")})
+    return {**created, "documents": []}
+
+
+@app.patch("/api/admin/university-contracts/{contract_id}")
+def update_university_contract(contract_id: str, payload: UniversityContractUpdateIn, user=Depends(require_roles("super_admin"))):
+    existing = db.table("university_contracts").select("*").eq("id", contract_id).limit(1).execute().data or []
+    if not existing:
+        fail("Contract record not found", 404)
+    updates = payload.model_dump(mode="json", exclude_unset=True)
+    if not updates:
+        fail("No contract changes supplied", 400)
+    updates.update({"updated_by": user["id"], "updated_at": now().isoformat()})
+    updated = db.table("university_contracts").update(updates).eq("id", contract_id).execute().data[0]
+    record_audit(user, "updated", "university_contract", contract_id, updated.get("university_id"), {"fields": list(updates.keys())})
+    return _contract_rows_with_documents([updated])[0]
+
+
+@app.post("/api/admin/university-contracts/{contract_id}/documents", status_code=201)
+async def upload_university_contract_document(
+    contract_id: str,
+    document_type: str = Form(...),
+    file: UploadFile = File(...),
+    user=Depends(require_roles("super_admin")),
+):
+    existing = db.table("university_contracts").select("id,university_id").eq("id", contract_id).limit(1).execute().data or []
+    if not existing:
+        fail("Contract record not found", 404)
+    if document_type not in CONTRACT_DOCUMENT_TYPES:
+        fail("Document type must be work_order, invoice, or supporting", 400)
+    original_name = (file.filename or "document").strip()
+    extension = os.path.splitext(original_name)[1].lower()
+    content_type = (file.content_type or "").lower()
+    if extension not in CONTRACT_DOCUMENT_EXTENSIONS or content_type not in CONTRACT_DOCUMENT_MIME_TYPES:
+        fail("Only PDF and image documents are supported", 415)
+    contents = await file.read()
+    if not contents:
+        fail("The uploaded document is empty", 400)
+    if len(contents) > CONTRACT_DOCUMENT_MAX_BYTES:
+        fail("Documents must be 20 MB or smaller", 413)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", original_name).strip(".-") or "document"
+    storage_path = f"{existing[0]['university_id']}/{contract_id}/{uuid.uuid4().hex}-{safe_name}"
+    try:
+        db.storage_bucket(CONTRACT_DOCUMENT_BUCKET).upload(
+            storage_path,
+            contents,
+            {"content-type": content_type, "cache-control": "3600", "upsert": "false"},
+        )
+        created = db.table("university_contract_documents").insert({
+            "contract_id": contract_id,
+            "document_type": document_type,
+            "storage_path": storage_path,
+            "original_name": original_name,
+            "mime_type": content_type,
+            "size_bytes": len(contents),
+            "created_by": user["id"],
+        }).execute().data[0]
+    except Exception:
+        logger.exception("Could not save university contract document")
+        fail("The document could not be saved. Confirm the private storage bucket is deployed.", 503)
+    record_audit(user, "uploaded", "university_contract_document", created.get("id"), existing[0].get("university_id"), {"document_type": document_type, "original_name": original_name})
+    return created
+
+
+@app.get("/api/admin/university-contract-documents/{document_id}/url")
+def get_university_contract_document_url(document_id: str, user=Depends(require_roles("super_admin"))):
+    documents = db.table("university_contract_documents").select("id,contract_id,original_name,storage_path").eq("id", document_id).limit(1).execute().data or []
+    if not documents:
+        fail("Contract document not found", 404)
+    contract = db.table("university_contracts").select("university_id").eq("id", documents[0]["contract_id"]).limit(1).execute().data or []
+    if not contract:
+        fail("Contract record not found", 404)
+    return {"url": _contract_storage_document_url(documents[0]["storage_path"]), "name": documents[0]["original_name"]}
+
+
 @app.get("/api/admin/users")
 def list_all_users(user=Depends(require_roles("super_admin"))):
     return db.table("profiles").select("id,full_name,email,role,status,university_id,reports_to,created_at,last_login_at,must_change_password").order("created_at", desc=True).execute().data or []
@@ -1652,6 +1833,33 @@ def create_user(payload: UserIn, actor: dict[str, Any]) -> dict[str, Any]:
     return safe_created
 
 
+def placement_managers_reporting_to(coordinator_id: str, university_id: str | None = None) -> list[dict[str, Any]]:
+    query = db.table("profiles").select("id,full_name,email,status,university_id,reports_to") \
+        .eq("reports_to", coordinator_id) \
+        .eq("role", "placement_manager")
+    if university_id:
+        query = query.eq("university_id", university_id)
+    return query.order("full_name").execute().data or []
+
+
+def require_coordinator_reassignment(coordinator: dict[str, Any], university_id: str | None) -> None:
+    managers = placement_managers_reporting_to(str(coordinator["id"]), university_id)
+    if not managers:
+        return
+    names = [str(item.get("full_name") or "Placement manager") for item in managers]
+    fail(
+        "Reassign this coordinator's placement managers to another coordinator or the university administrator before deactivating or removing the coordinator.",
+        409,
+        {
+            "code": "COORDINATOR_REASSIGNMENT_REQUIRED",
+            "message": "Reassign this coordinator's placement managers to another coordinator or the university administrator before deactivating or removing the coordinator.",
+            "coordinator_id": str(coordinator["id"]),
+            "placement_manager_ids": [str(item["id"]) for item in managers],
+            "placement_manager_names": names,
+        },
+    )
+
+
 @app.patch("/api/team/users/{user_id}")
 def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(require_roles("university_admin", "coordinator"))):
     if user.get("role") not in {"university_admin", "coordinator"}:
@@ -1668,6 +1876,8 @@ def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(requi
         or target.get("role") not in {"placement_manager"}
     ):
         fail("You can only manage your own regional managers and placement managers", 403)
+    if payload.status == "inactive" and target.get("role") == "coordinator":
+        require_coordinator_reassignment(target, user.get("university_id"))
     updates: dict[str, Any] = {}
     if payload.full_name is not None:
         normalized_name = payload.full_name.strip()
@@ -1702,6 +1912,49 @@ def update_team_user(user_id: str, payload: TeamUserUpdateIn, user=Depends(requi
     return safe_user(result.data[0])
 
 
+@app.patch("/api/team/users/{user_id}/reporting-line")
+def update_reporting_line(user_id: str, payload: ReportingLineIn, user=Depends(require_roles("university_admin"))):
+    if user_id == str(user["id"]):
+        fail("A university administrator cannot be assigned as a placement manager", 400)
+    target = get_profile(user_id)
+    if not target or str(target.get("university_id")) != str(user.get("university_id")):
+        fail("Placement manager not found in your university", 404)
+    if target.get("role") != "placement_manager":
+        fail("Only placement managers can be mapped to a coordinator", 400)
+    coordinator = get_profile(payload.reports_to)
+    if (
+        not coordinator
+        or str(coordinator.get("university_id")) != str(user.get("university_id"))
+        or coordinator.get("role") not in {"university_admin", "coordinator"}
+        or coordinator.get("status") != "active"
+    ):
+        fail("Choose an active coordinator or university administrator from your university", 400)
+    result = db.table("profiles").update({"reports_to": coordinator["id"]}).eq("id", user_id).eq("university_id", user["university_id"]).execute()
+    if not result.data:
+        fail("Placement manager not found in your university", 404)
+    updated = result.data[0]
+    invalidate_profile_cache(user_id, target.get("email"))
+    create_notification(
+        user_id,
+        "reporting_line_updated",
+        "Reporting line updated",
+        f"You now report to {coordinator.get('full_name', 'your reporting manager')}.",
+        user.get("university_id"),
+        "account",
+        user_id,
+        "Team",
+    )
+    record_audit(
+        user,
+        "reporting_line_updated",
+        "account",
+        user_id,
+        user.get("university_id"),
+        {"reports_to": coordinator["id"], "reports_to_role": coordinator.get("role"), "reports_to_name": coordinator.get("full_name")},
+    )
+    return {**safe_user(updated), "reports_to_name": coordinator.get("full_name")}
+
+
 @app.delete("/api/team/users/{user_id}")
 def delete_team_user(user_id: str, user=Depends(require_roles("university_admin", "coordinator"))):
     if user.get("role") not in {"university_admin", "coordinator"}:
@@ -1718,6 +1971,8 @@ def delete_team_user(user_id: str, user=Depends(require_roles("university_admin"
         or target.get("role") not in {"placement_manager"}
     ):
         fail("You can only manage your own placement managers", 403)
+    if target.get("role") == "coordinator":
+        require_coordinator_reassignment(target, user.get("university_id"))
     if db.table("profiles").select("id", count="exact").eq("reports_to", user_id).execute().count:
         fail("Deactivate this account instead because it has team members assigned to it", 409)
     owned_tables = ("organizations", "contacts", "meeting_reports", "meeting_action_items", "kanban_cards", "kanban_stages")
@@ -1734,6 +1989,11 @@ def delete_team_user(user_id: str, user=Depends(require_roles("university_admin"
 
 @app.patch("/api/admin/users/{user_id}")
 def update_admin_user(user_id: str, payload: UserStatusIn, user=Depends(require_roles("super_admin"))):
+    target = get_profile(user_id)
+    if not target:
+        fail("User not found", 404)
+    if payload.status == "inactive" and target.get("role") == "coordinator":
+        require_coordinator_reassignment(target, target.get("university_id"))
     result = db.table("profiles").update({"status": payload.status}).eq("id", user_id).neq("role", "super_admin").execute()
     if not result.data:
         fail("User not found", 404)
