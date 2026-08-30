@@ -1999,8 +1999,7 @@ def upsert_target(payload: TargetIn, user=Depends(require_roles("university_admi
     return db.table("placement_targets").insert(data).execute().data[0]
 
 
-@app.get("/api/placement/metrics")
-def list_metrics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+def placement_metrics_query(user: dict[str, Any], season_id: str | None = None):
     query = university_rows("placement_metrics", user)
     if season_id:
         query = query.eq("season_id", season_id)
@@ -2008,7 +2007,22 @@ def list_metrics(season_id: str | None = None, user=Depends(require_roles("unive
         query = query.eq("placement_manager_id", user["id"])
     elif user.get("role") == "coordinator":
         query = query.in_("placement_manager_id", team_ids(user))
-    return query.order("updated_at", desc=True).execute().data or []
+    return query
+
+
+def execute_placement_metrics(user: dict[str, Any], season_id: str | None = None) -> list[dict[str, Any]]:
+    query = placement_metrics_query(user, season_id)
+    try:
+        return query.order("updated_at", desc=True).execute().data or []
+    except Exception:
+        # Keep the placement workspace usable while an older deployment is missing the ordering column.
+        logger.exception("Unable to order placement metrics by updated_at; retrying without ordering")
+        return placement_metrics_query(user, season_id).execute().data or []
+
+
+@app.get("/api/placement/metrics")
+def list_metrics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
+    return execute_placement_metrics(user, season_id)
 
 
 @app.post("/api/placement/metrics", status_code=201)
@@ -2023,7 +2037,7 @@ def upsert_metric(payload: MetricIn, user=Depends(require_roles("coordinator")))
     if category_id and not university_rows("company_categories", user).eq("id", category_id).limit(1).execute().data:
         fail("Choose a company category configured by your University Admin", 400)
     manager_id = org[0].get("placement_manager_id")
-    data = {**payload.model_dump(), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
+    data = {**payload.model_dump(mode="json"), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
     row = db.table("placement_metrics").select("id").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
     if row:
         updated = db.table("placement_metrics").update(data).eq("id", row[0]["id"]).execute().data[0]
