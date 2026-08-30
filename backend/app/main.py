@@ -809,10 +809,6 @@ class TargetIn(BaseModel):
     user_id: str
     category_id: str | None = None
     companies_target: int = Field(default=0, ge=0)
-    drives_target: int = Field(default=0, ge=0)
-    offers_target: int = Field(default=0, ge=0)
-    students_placed_target: int = Field(default=0, ge=0)
-    students_joined_target: int = Field(default=0, ge=0)
 
 
 class MetricIn(BaseModel):
@@ -2068,7 +2064,7 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
         target_query = target_query.in_("user_id", team_ids(user))
     targets = target_query.execute().data or []
     totals = {key: sum(int(row.get(key) or 0) for row in rows) for key in keys}
-    target_keys = ("companies_target", "drives_target", "offers_target", "students_placed_target", "students_joined_target")
+    target_keys = ("companies_target",)
     target_totals = {key: sum(int(row.get(key) or 0) for row in targets) for key in target_keys}
     today = date.today()
     status_labels = {"prospect": "Prospect", "outreach": "Outreach", "in_talks": "In talks", "discussion": "Discussion", "proposal_shared": "Proposal shared", "negotiation": "Negotiation", "drive_scheduled": "Drive scheduled", "drive_completed": "Drive completed", "offer_stage": "Offer stage", "placed": "Placed", "joined": "Joined", "on_hold": "On hold", "cancelled": "Cancelled"}
@@ -2378,7 +2374,7 @@ def build_analytics_query_context(analytics: dict[str, Any], filters: dict[str, 
 
     rows = [row for row in source_rows if matches(row)]
     metric_keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed", "students_joined")
-    target_keys = ("companies_target", "drives_target", "offers_target", "students_placed_target", "students_joined_target")
+    target_keys = ("companies_target",)
     totals = {key: sum(int(row.get(key) or 0) for row in rows) for key in metric_keys}
     targets = analytics.get("targets") or []
     filtered_targets = [target for target in targets if

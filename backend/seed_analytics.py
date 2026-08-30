@@ -183,10 +183,6 @@ def ensure_targets(university_id: str, admin_id: str, seasons: list[dict], categ
                 "user_id": manager["id"],
                 "category_id": category["id"],
                 "companies_target": 8 + manager_index * 3 + season_index * 2,
-                "drives_target": 4 + manager_index + season_index,
-                "offers_target": 10 + manager_index * 2,
-                "students_placed_target": 12 + manager_index * 4,
-                "students_joined_target": 9 + manager_index * 3,
                 "created_by": admin_id,
             }).execute()
             keys.add(key)
