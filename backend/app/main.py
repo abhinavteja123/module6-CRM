@@ -870,6 +870,7 @@ class MetricIn(BaseModel):
     drives_conducted: int = Field(default=0, ge=0)
     offers_received: int = Field(default=0, ge=0)
     students_placed: int = Field(default=0, ge=0)
+    students_joined: int = Field(default=0, ge=0)
     pipeline_status: Literal[
         "prospect", "outreach", "in_talks", "discussion", "proposal_shared",
         "negotiation", "drive_scheduled", "drive_ongoing", "drive_completed", "offer_stage",
@@ -897,6 +898,11 @@ class AccessGrantIn(BaseModel):
 
 class DuplicateReviewIn(BaseModel):
     status: Literal["approved", "rejected"]
+    review_note: str | None = None
+
+
+class MetricReviewIn(BaseModel):
+    status: Literal["approved", "changes_requested"]
     review_note: str | None = None
 
 
@@ -1001,7 +1007,27 @@ def me(user=Depends(current_user)):
 
 
 def refresh_due_notifications(user: dict[str, Any]) -> None:
-    """Create idempotent in-app reminders for the current user's owned CRM records."""
+    """Create idempotent in-app reminders for actionable workspace records."""
+    if user.get("role") == "university_admin":
+        try:
+            pending_tables = (
+                ("duplicate_company_requests", "duplicate_company_approval", "Company approval pending", "Review a duplicate company request.", "duplicate_company_request", "Contact Approvals"),
+                ("duplicate_contact_requests", "duplicate_contact_approval", "Contact approval pending", "Review a duplicate contact request.", "duplicate_contact_request", "Contact Approvals"),
+            )
+            for table, notification_type, title, message, entity_type, href in pending_tables:
+                rows = university_rows(table, user).eq("status", "pending").execute().data or []
+                for row in rows:
+                    existing = (db.table("notifications").select("id")
+                        .eq("user_id", user["id"])
+                        .eq("entity_type", entity_type)
+                        .eq("entity_id", row["id"])
+                        .eq("type", notification_type)
+                        .limit(1).execute().data or [])
+                    if not existing:
+                        create_notification(str(user["id"]), notification_type, title, message, user.get("university_id"), entity_type, row["id"], href)
+        except Exception:
+            logger.exception("Unable to refresh university admin pending notifications")
+        return
     if user.get("role") != "placement_manager":
         return
     today = date.today().isoformat()
@@ -1027,6 +1053,7 @@ def refresh_due_notifications(user: dict[str, Any]) -> None:
 
 @app.get("/api/notifications")
 def list_notifications(background_tasks: BackgroundTasks, limit: int = Query(default=30, ge=1, le=100), user=Depends(current_user)):
+    refresh_due_notifications(user)
     background_tasks.add_task(refresh_due_notifications, user)
     return db.table("notifications").select("*").eq("user_id", user["id"]).order("created_at", desc=True).limit(limit).execute().data or []
 
@@ -1121,10 +1148,13 @@ def create_organization(payload: OrganizationIn, user=Depends(require_roles("pla
 
 
 @app.patch("/api/organizations/{item_id}")
-def update_organization(item_id: str, payload: OrganizationUpdateIn, user=Depends(require_roles("placement_manager"))):
+def update_organization(item_id: str, payload: OrganizationUpdateIn, user=Depends(require_roles("placement_manager", "coordinator"))):
     current = scoped_rows("organizations", user, item_id).execute().data or []
     if not current:
         fail("Organization not found", 404)
+    organization = current[0]
+    if user.get("role") == "coordinator" and not has_crm_area_access(user, "organizations", item_id):
+        fail("Your coordinator access does not include this company", 403)
     updates = {key: value for key, value in payload.model_dump(exclude_unset=True).items() if value is not None}
     if "category_id" in updates and not university_rows("company_categories", user).eq("id", updates["category_id"]).limit(1).execute().data:
         fail("Choose a company category configured by your University Admin", 400)
@@ -1141,12 +1171,26 @@ def update_organization(item_id: str, payload: OrganizationUpdateIn, user=Depend
     if not updates:
         fail("No organization changes supplied")
     try:
-        result = db.table("organizations").update({**updates, "updated_at": now().isoformat()}).eq("id", item_id).eq("placement_manager_id", user["id"]).execute()
+        query = db.table("organizations").update({**updates, "updated_at": now().isoformat()}).eq("id", item_id)
+        if user.get("role") == "placement_manager":
+            query = query.eq("placement_manager_id", user["id"])
+        result = query.execute()
     except Exception as error:
         fail_if_category_migration_pending(error)
     if not result.data:
         fail("Organization not found", 404)
     record_audit(user, "updated", "organization", item_id, user.get("university_id"), {"fields": list(updates.keys()), "status": result.data[0].get("status")})
+    if user.get("role") == "coordinator" and organization.get("placement_manager_id"):
+        notify_users(
+            [str(organization["placement_manager_id"])],
+            "organization_details_updated",
+            "Company registration details updated",
+            f'{user.get("full_name", "The coordinator")} updated the PM registration details for {organization.get("name", "a company")}.',
+            user.get("university_id"),
+            "organization",
+            item_id,
+            "Organizations",
+        )
     return result.data[0]
 
 
@@ -2310,6 +2354,32 @@ def execute_placement_metrics(user: dict[str, Any], season_id: str | None = None
         return placement_metrics_query(user, season_id).execute().data or []
 
 
+PLACEMENT_REVIEW_FIELDS = {"review_status", "review_note", "reviewed_by", "reviewed_at"}
+
+
+def is_missing_placement_review_column(error: Exception) -> bool:
+    message = str(error)
+    return "Could not find" in message and any(f"'{field}' column" in message for field in PLACEMENT_REVIEW_FIELDS)
+
+
+def write_placement_metric(data: dict[str, Any], metric_id: str | None = None) -> dict[str, Any]:
+    def execute(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        if metric_id:
+            return db.table("placement_metrics").update(payload).eq("id", metric_id).execute().data or []
+        return db.table("placement_metrics").insert(payload).execute().data or []
+
+    try:
+        rows = execute(data)
+    except Exception as error:
+        if not is_missing_placement_review_column(error):
+            raise
+        logger.warning("Placement review migration is not deployed; saving metric without review metadata")
+        rows = execute({key: value for key, value in data.items() if key not in PLACEMENT_REVIEW_FIELDS})
+    if not rows:
+        fail("Placement update could not be saved", 409)
+    return rows[0]
+
+
 @app.get("/api/placement/metrics")
 def list_metrics(season_id: str | None = None, user=Depends(require_roles("university_admin", "coordinator", "placement_manager", "data_analyst"))):
     return execute_placement_metrics(user, season_id)
@@ -2327,15 +2397,56 @@ def upsert_metric(payload: MetricIn, user=Depends(require_roles("coordinator")))
     if category_id and not university_rows("company_categories", user).eq("id", category_id).limit(1).execute().data:
         fail("Choose a company category configured by your University Admin", 400)
     manager_id = org[0].get("placement_manager_id")
-    data = {**payload.model_dump(mode="json"), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat()}
+    data = {**payload.model_dump(mode="json"), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat(), "review_status": "pending", "review_note": None, "reviewed_by": None, "reviewed_at": None}
     row = db.table("placement_metrics").select("id").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
     if row:
-        updated = db.table("placement_metrics").update(data).eq("id", row[0]["id"]).execute().data[0]
+        updated = write_placement_metric(data, row[0]["id"])
         record_audit(user, "updated", "placement_metric", updated.get("id"), user.get("university_id"), {"organization_id": payload.organization_id, "pipeline_status": payload.pipeline_status, "outlook": payload.outlook})
+        if manager_id and str(manager_id) != str(user["id"]):
+            create_notification(str(manager_id), "placement_update_ready", "Placement update ready for review", f"{org[0].get('name', 'A company')} has a new placement update from {user.get('full_name', 'the coordinator')}.", user.get("university_id"), "placement_metric", updated.get("id"), "Placement Tracker")
         return updated
-    created = db.table("placement_metrics").insert(data).execute().data[0]
+    created = write_placement_metric(data)
     record_audit(user, "created", "placement_metric", created.get("id"), user.get("university_id"), {"organization_id": payload.organization_id, "pipeline_status": payload.pipeline_status, "outlook": payload.outlook})
+    if manager_id and str(manager_id) != str(user["id"]):
+        create_notification(str(manager_id), "placement_update_ready", "Placement update ready for review", f"{org[0].get('name', 'A company')} has a new placement update from {user.get('full_name', 'the coordinator')}.", user.get("university_id"), "placement_metric", created.get("id"), "Placement Tracker")
     return created
+
+
+@app.patch("/api/placement/metrics/{metric_id}/review")
+def review_metric(metric_id: str, payload: MetricReviewIn, user=Depends(require_roles("placement_manager"))):
+    rows = db.table("placement_metrics").select("*").eq("id", metric_id).eq("university_id", user.get("university_id")).eq("placement_manager_id", user["id"]).limit(1).execute().data or []
+    if not rows:
+        fail("Placement update not found", 404)
+    metric = rows[0]
+    try:
+        updated_rows = (db.table("placement_metrics")
+            .update({"review_status": payload.status, "review_note": payload.review_note, "reviewed_by": user["id"], "reviewed_at": now().isoformat()})
+            .eq("id", metric_id).eq("placement_manager_id", user["id"])
+            .execute().data or [])
+    except Exception as error:
+        if is_missing_placement_review_column(error):
+            fail("Apply migration 20260831000024 before reviewing placement updates", 503)
+        raise
+    if not updated_rows:
+        fail("Placement update could not be reviewed", 409)
+    coordinator_id = metric.get("updated_by")
+    coordinator = get_profile(str(coordinator_id)) if coordinator_id else None
+    if not coordinator or coordinator.get("role") != "coordinator":
+        admins = db.table("profiles").select("id").eq("university_id", user.get("university_id")).eq("role", "university_admin").eq("status", "active").execute().data or []
+        recipients = [str(item["id"]) for item in admins]
+    else:
+        recipients = [str(coordinator["id"])]
+    org_rows = db.table("organizations").select("name").eq("id", metric.get("organization_id")).limit(1).execute().data or []
+    org_name = org_rows[0].get("name") if org_rows else "A company"
+    if payload.status == "changes_requested":
+        message = f"{user.get('full_name', 'The placement manager')} requested changes for {org_name}: {payload.review_note or 'Please review the tracker details.'}"
+        title = "Placement update needs changes"
+    else:
+        message = f"{user.get('full_name', 'The placement manager')} approved the placement update for {org_name}."
+        title = "Placement update approved"
+    notify_users(recipients, "placement_update_reviewed", title, message, user.get("university_id"), "placement_metric", metric_id, "Placement Tracker")
+    record_audit(user, "reviewed", "placement_metric", metric_id, user.get("university_id"), {"status": payload.status, "organization_id": metric.get("organization_id")})
+    return updated_rows[0]
 
 
 @app.get("/api/placement/analytics")

@@ -458,7 +458,7 @@ function Workspace({ role, user, profile, onLogout }) {
     [editingStage, setEditingStage] = useState(null),
     [editingUser, setEditingUser] = useState(null),
     [editingUniversity, setEditingUniversity] = useState(null),
-    [placementData, setPlacementData] = useState({ seasons: [], categories: [], industries: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, contactApprovals: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
+    [placementData, setPlacementData] = useState({ seasons: [], categories: [], industries: [], cities: [], assignments: [], targets: [], metrics: [], analytics: null, contactApprovals: [], companyApprovals: [], access: null, settings: { coordinator_target_entry_enabled: false } }),
     [loaded, setLoaded] = useState(false);
   const mode = "company";
   const copy = workspaceCopy.company;
@@ -470,7 +470,7 @@ function Workspace({ role, user, profile, onLogout }) {
   const visibleReports = reports;
   const visibleCards = cards;
   const loadPlacementData = async () => {
-    const [analytics, metrics, seasons, categories, industries, cities, assignments, targets, contactApprovals, access, settings] = await Promise.all([
+    const [analytics, metrics, seasons, categories, industries, cities, assignments, targets, contactApprovals, companyApprovals, access, settings] = await Promise.all([
       analyticsViewer ? apiFetch("/api/placement/analytics") : Promise.resolve(null),
       apiFetch("/api/placement/metrics"),
       apiFetch("/api/placement/seasons"),
@@ -480,6 +480,7 @@ function Workspace({ role, user, profile, onLogout }) {
       apiFetch("/api/placement/assignments"),
       apiFetch("/api/placement/targets"),
       universityAdmin ? apiFetch("/api/placement/contact-requests") : Promise.resolve([]),
+      universityAdmin ? apiFetch("/api/placement/duplicate-requests") : Promise.resolve([]),
       universityAdmin ? apiFetch("/api/placement/access") : supervisor ? apiFetch("/api/placement/access/me") : Promise.resolve(null),
       apiFetch("/api/placement/settings"),
     ]);
@@ -494,11 +495,13 @@ function Workspace({ role, user, profile, onLogout }) {
       assignments: assignments || [],
       targets: targets || [],
       contactApprovals: contactApprovals || [],
+      companyApprovals: companyApprovals || [],
       access: access || null,
       settings: settings || { coordinator_target_entry_enabled: false },
     }));
   };
   const coordinatorHasAccess = (area) => supervisor && (placementData.access?.access_level === "full" || Boolean(placementData.access?.permissions?.[area]));
+  const canCoordinatorEditOrganizations = coordinatorHasAccess("organizations");
   const coordinatorNav = ["Overview", "Team", "Placement Tracker"];
   if (coordinatorHasAccess("organizations")) coordinatorNav.push(organizationNav);
   if (coordinatorHasAccess("contacts")) coordinatorNav.push(peopleNav);
@@ -511,7 +514,7 @@ function Workspace({ role, user, profile, onLogout }) {
         ? coordinatorNav
         : dataAnalyst
           ? ["Analytics"]
-          : ["Overview", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
+          : ["Overview", "Placement Tracker", organizationNav, peopleNav, "Meeting Reports", "Kanban"];
   const refresh = async () => {
     if (!user) return;
     try {
@@ -600,6 +603,9 @@ function Workspace({ role, user, profile, onLogout }) {
     }
   };
   useEffect(() => {
+    if (user?.id) refreshNotifications();
+  }, [user?.id]);
+  useEffect(() => {
     const onKeyDown = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -659,6 +665,15 @@ function Workspace({ role, user, profile, onLogout }) {
       showSuccess("Notifications marked as read.");
     } catch (e) {
       setError(e.message);
+    }
+  };
+  const openNotification = async (notification) => {
+    await markNotificationRead(notification);
+    setNotificationsOpen(false);
+    const destination = notification.href || (notification.type?.includes("contact") ? "Contact Approvals" : notification.type?.includes("placement") ? "Placement Tracker" : null);
+    if (destination && nav.includes(destination)) {
+      setActive(destination);
+      setQuery("");
     }
   };
   const orgName = (id) =>
@@ -1129,7 +1144,7 @@ function Workspace({ role, user, profile, onLogout }) {
            <CoordinatorOverviewDashboard summary={teamSummary} organizations={orgs} contacts={contacts} reports={reports} cards={cards} excludeUserId={user?.id} onDrillThrough={openDrillThrough} />
         </div>
       ) : universityAdmin ? (
-         <TeamDashboard summary={teamSummary} analytics={placementData.analytics} organizations={orgs} contacts={contacts} reports={reports} cards={cards} metrics={placementData.metrics} masked={false} excludeUserId={user?.id} onDrillThrough={openDrillThrough} />
+         <><AdminAttentionPanel notifications={notifications} onOpen={openNotification} /><TeamDashboard summary={teamSummary} analytics={placementData.analytics} organizations={orgs} contacts={contacts} reports={reports} cards={cards} metrics={placementData.metrics} masked={false} excludeUserId={user?.id} onDrillThrough={openDrillThrough} /></>
       ) : dataAnalyst ? (
          <><CategoryReference categories={placementData.categories} /><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} onDrillThrough={openDrillThrough} /></>
       ) : (
@@ -1155,10 +1170,10 @@ function Workspace({ role, user, profile, onLogout }) {
       <TargetEntryPanel data={placementData} users={teamSummary?.users || managers} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
        ) : active === "Analytics" && analyticsViewer ? (
        <><PlacementAnalyticsCanvas analytics={placementData.analytics} data={placementData} role={role} onDrillThrough={openDrillThrough} /></>
-    ) : supervisor && (active === "Placement Tracker" || active === "Placement Progress" || active === "Placement Updates" || active === "Placement Metrics") ? (
-      <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} canEdit={supervisor} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} /></>
+    ) : (supervisor || placementManager) && (active === "Placement Tracker" || active === "Placement Progress" || active === "Placement Updates" || active === "Placement Metrics") ? (
+      <><CategoryReference categories={placementData.categories} /><PlacementMetrics data={placementData} organizations={orgs} currentUserName={profile?.full_name} canEdit={supervisor} reviewer={placementManager} onEditCompany={canCoordinatorEditOrganizations ? (organization) => { setEditingOrg(organization); setModal("org"); } : undefined} onRefresh={supervisor ? refreshManagers : refresh} onError={setError} onSuccess={showSuccess} /></>
     ) : universityAdmin && active === "Contact Approvals" ? (
-      <ContactApprovals requests={placementData.contactApprovals} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
+      <ContactApprovals requests={placementData.contactApprovals} companyRequests={placementData.companyApprovals} onRefresh={refreshManagers} onError={setError} onSuccess={showSuccess} />
     ) : active === organizationNav ? (
       <Organizations
         orgs={visibleOrgs}
@@ -1167,9 +1182,9 @@ function Workspace({ role, user, profile, onLogout }) {
         query={query}
         setQuery={setQuery}
         onAdd={placementManager ? () => setModal("org") : undefined}
-        onEdit={placementManager ? (organization) => { setEditingOrg(organization); setModal("org"); } : undefined}
-        onDelete={deleteOrg}
-        canEdit={placementManager}
+        onEdit={placementManager || canCoordinatorEditOrganizations ? (organization) => { setEditingOrg(organization); setModal("org"); } : undefined}
+        onDelete={placementManager ? deleteOrg : undefined}
+        canEdit={placementManager || canCoordinatorEditOrganizations}
       />
     ) : active === peopleNav ? (
       <Contacts
@@ -1286,7 +1301,7 @@ function Workspace({ role, user, profile, onLogout }) {
             <button className="global-search-trigger" aria-label="Open global search" onClick={() => setSearchOpen(true)}><Search size={16} /><span>Search everything</span><kbd>Ctrl K</kbd></button>
             <div className="notification-wrap">
               <button className="icon-btn notification-button" aria-label="Open notifications" onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.is_read) && <span className="notification-dot" />}</button>
-              {notificationsOpen && <div className="notification-popover"><div className="notification-head"><div><b>Notifications</b><small>{notifications.filter((item) => !item.is_read).length} unread</small></div><button className="text-btn" onClick={markAllNotificationsRead}><CheckCheck size={14} />Mark all read</button></div>{notifications.length ? notifications.slice(0, 8).map((notification) => <button className={`notification-item ${notification.is_read ? "read" : ""}`} key={notification.id} onClick={() => markNotificationRead(notification)}><span className="notification-icon"><Bell size={14} /></span><span><b>{notification.title}</b><small>{notification.message}</small><em>{new Date(notification.created_at).toLocaleString()}</em></span></button>) : <div className="notification-empty">You’re all caught up.</div>}</div>}
+              {notificationsOpen && <div className="notification-popover"><div className="notification-head"><div><b>Notifications</b><small>{notifications.filter((item) => !item.is_read).length} needs review</small></div><button className="text-btn" onClick={markAllNotificationsRead}><CheckCheck size={14} />Mark all reviewed</button></div>{notifications.filter((item) => !item.is_read).length ? notifications.filter((item) => !item.is_read).slice(0, 8).map((notification) => <button className="notification-item" key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon"><Bell size={14} /></span><span><b>{notification.title}</b><small>{notification.message}</small><em>{new Date(notification.created_at).toLocaleString()} · Open {notification.href || "workspace"}</em></span><ChevronRight size={15} className="notification-chevron" /></button>) : <div className="notification-empty"><CheckCheck size={18} /><b>You’re all caught up.</b><span>Reviewed items leave this queue.</span></div>}</div>}
             </div>
             <div className="top-user">
               <div className="avatar">
@@ -1859,6 +1874,14 @@ function CoordinatorOverviewDashboard({ summary, organizations = [], contacts = 
     ["Overdue follow-ups", totals.overdue_reports, "Needs attention", totals.overdue_reports ? "danger" : "success", () => open("Overdue follow-ups", "Reports with follow-ups past their due date", reports.filter((report) => report.follow_up_date && String(report.follow_up_date).slice(0, 10) < new Date().toISOString().slice(0, 10)), reportColumns)],
   ];
   return <div className="overview-dashboard"><div className="overview-dashboard-head"><div><p className="eyebrow">COORDINATOR · OVERVIEW</p><h2>Current team picture</h2></div><span className="overview-updated"><span className="status-dot" />Live team view</span></div><OverviewKpiGrid items={kpis} /><div className="overview-dashboard-grid coordinator-overview-grid"><section className="panel overview-visual-panel"><div className="overview-panel-head"><div><p className="eyebrow">TEAM WORKLOAD</p><h3>Pending and overdue work</h3></div><button type="button" className="count overview-drill-link" onClick={() => open("Team workload", "Pending and overdue work by team member", workloadRows, [{ key: "full_name", label: "Name" }, { key: "pending_actions", label: "Pending" }, { key: "overdue_followups", label: "Overdue" }, { key: "report_status", label: "Status" }])}>{users.length} members <ArrowUpRight size={13} /></button></div><div className="overview-workload-chart">{workloadRows.map((item) => { const pending = item.pending_actions || 0; const overdue = item.overdue_followups || 0; const total = pending + overdue; return <button type="button" className="overview-workload-row overview-drill-row" key={item.id} onClick={() => open(`${item.full_name} workload`, "Pending and overdue work for this team member", [item], [{ key: "full_name", label: "Name" }, { key: "pending_actions", label: "Pending" }, { key: "overdue_followups", label: "Overdue" }, { key: "report_status", label: "Status" }])}><div className="overview-workload-name"><b>{item.full_name}</b><small>{item.report_status || "Not tracked"}</small></div><div className="overview-workload-track"><em style={{ width: `${Math.round((total / maxWorkload) * 100)}%` }} /><i style={{ width: `${Math.round((overdue / Math.max(1, total)) * 100)}%` }} /></div><strong className={overdue ? "danger-number" : ""}>{total}</strong></button>; })}{!workloadRows.length && <div className="overview-empty">No team activity is available.</div>}</div><div className="overview-chart-legend"><span><i className="pending" />Pending</span><span><i className="overdue" />Overdue</span></div></section><section className="panel overview-list-panel"><div className="overview-panel-head"><div><p className="eyebrow">ATTENTION QUEUE</p><h3>Team members to check in with</h3></div><button type="button" className="count overview-drill-link" onClick={() => open("Team attention queue", "Team members with pending or overdue work", attentionRows, [{ key: "full_name", label: "Name" }, { key: "overdue_followups", label: "Overdue" }, { key: "pending_actions", label: "Pending" }, { key: "report_status", label: "Status" }])}>{attentionRows.length} <ArrowUpRight size={13} /></button></div>{attentionRows.length ? <div className="overview-list">{attentionRows.map((item) => <button type="button" className="overview-list-item overview-drill-row" key={item.id} onClick={() => open(`${item.full_name} attention`, "Work requiring follow-up", [item], [{ key: "full_name", label: "Name" }, { key: "overdue_followups", label: "Overdue" }, { key: "pending_actions", label: "Pending" }, { key: "report_status", label: "Status" }])}><span className={`overview-list-icon ${item.overdue_followups ? "danger" : "warning"}`}><AlertTriangle size={14} /></span><div><b>{item.full_name}</b><small>{item.overdue_followups || 0} overdue · {item.pending_actions || 0} pending</small></div><span className={`report-status ${String(item.report_status || "").toLowerCase().replaceAll(" ", "-")}`}>{item.report_status || "Not tracked"}</span></button>)}</div> : <div className="overview-empty success"><ListChecks size={19} /><b>Team is on track</b><span>No pending or overdue work is reported.</span></div>}</section></div><section className="panel table-panel overview-team-panel"><div className="overview-panel-head"><div><p className="eyebrow">TEAM ACTIVITY</p><h3>Current team activity</h3></div><button type="button" className="count overview-drill-link" onClick={() => open("Team activity", "Team activity records", users, [{ key: "full_name", label: "Name" }, { key: "role", label: "Role" }, { key: "organization_count", label: "Companies" }, { key: "report_count", label: "Reports" }, { key: "overdue_followups", label: "Overdue" }])}>{users.length} members <ArrowUpRight size={13} /></button></div><TeamTable users={users} masked /></section></div>;
+}
+
+function AdminAttentionPanel({ notifications = [], onOpen }) {
+  const items = notifications.filter((item) => !item.is_read).slice(0, 5);
+  return <section className={`panel admin-attention-panel ${items.length ? "has-items" : "is-clear"}`}>
+    <div className="admin-attention-head"><div><p className="eyebrow">ADMIN ATTENTION</p><h3>{items.length ? `${items.length} item${items.length === 1 ? "" : "s"} need review` : "Nothing needs review"}</h3><span className="muted">Approvals and operational updates are grouped here until you review them.</span></div><Bell size={19} /></div>
+    {items.length ? <div className="admin-attention-list">{items.map((item) => <button type="button" className="admin-attention-item" key={item.id} onClick={() => onOpen(item)}><span className="notification-icon"><Bell size={14} /></span><span><b>{item.title}</b><small>{item.message}</small></span><span className="admin-attention-link">Open <ChevronRight size={14} /></span></button>)}</div> : <div className="admin-attention-clear"><CheckCheck size={18} /><span>Reviewed items stay out of this queue until a new request is created.</span></div>}
+  </section>;
 }
 
 function DashboardFlowHeader({ role, title, description, steps = [] }) {
@@ -2475,7 +2498,7 @@ function Organizations({ orgs, categories = [], mode, query, setQuery, onAdd, on
                     ? new Date(o.updated_at).toLocaleDateString()
                     : "Today"}
                 </td>
-                {canEdit && <td><div className="actions"><button className="text-btn" onClick={() => onEdit(o)}><Pencil size={13} />Edit</button><button className="delete-btn" onClick={() => onDelete(o.id)}>Delete</button></div></td>}
+                {canEdit && <td><div className="actions"><button className="text-btn" onClick={() => onEdit(o)}><Pencil size={13} />Edit</button>{onDelete && <button className="delete-btn" onClick={() => onDelete(o.id)}>Delete</button>}</div></td>}
               </tr>
             ))}
           </tbody>
@@ -3362,9 +3385,10 @@ function TargetEntryPanel({ data, users, onRefresh, onError, onSuccess }) {
   return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">UNIVERSITY ADMIN TARGETS</p><h2>Set company targets</h2><p className="muted">Declare the company acquisition target for each placement manager and category. Drives, offers, placements, and joining are tracked as actual outcomes.</p></div></div><form className="panel form-card" onSubmit={save}><div className="form-grid"><Select label="Season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.academic_year}</option>)}</Select><Select label="Team member" name="user_id"><option value="">Choose team member</option>{(users || []).filter((item) => ["coordinator", "placement_manager"].includes(item.role)).map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</Select></div><Select label="Company category" name="category_id"><option value="">All categories</option>{(data.categories || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Field label="Company target" name="companies_target" type="number" min="0" defaultValue="0" /><button className="btn primary" disabled={busy}>Save company target</button></form></div>;
 }
 
-function ContactApprovals({ requests, onRefresh, onError, onSuccess }) {
-  const review = async (id, status) => { try { await apiFetch(`/api/placement/contact-requests/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await onRefresh(); onSuccess(`Contact request ${status}.`); } catch (e) { onError(e.message); } };
-  return <div className="panel table-panel duplicate-approvals-panel contact-approvals-panel"><div className="panel-head"><div><p className="eyebrow">CONTACT COLLABORATION</p><h2>Contact approvals</h2><p className="muted">A contact already linked to this company requires University Admin approval. One pending request is kept per existing contact and requested company.</p></div></div><table className="duplicate-approvals-table contact-approvals-table"><thead><tr><th>Requested contact</th><th>Existing contact</th><th>Existing owner</th><th>Requested company</th><th>Requested by</th><th>Status</th><th>Actions</th></tr></thead><tbody>{(requests || []).map((request) => <tr key={request.id}><td><b>{request.requested_name}</b><small>{request.requested_payload?.email || "Contact details submitted"}</small></td><td><b>{request.existing_contact_name || "Existing contact"}</b><small>{request.existing_contact_email || "Contact details protected"}</small></td><td>{request.existing_organization_owner_name || "Placement manager"}</td><td>{request.requested_organization_name || request.existing_organization_name || "Company"}</td><td>{request.requested_by_name || request.requested_by}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <div className="approval-actions"><button className="text-btn" onClick={() => review(request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review(request.id, "rejected")}>Reject</button></div>}</td></tr>)}</tbody></table>{!requests?.length && <div className="empty-state"><h3>No contact approval requests</h3><p className="muted">Duplicate contact requests will appear here.</p></div>}</div>;
+function ContactApprovals({ requests = [], companyRequests = [], onRefresh, onError, onSuccess }) {
+  const review = async (kind, id, status) => { try { await apiFetch(`/api/placement/${kind === "company" ? "duplicate-requests" : "contact-requests"}/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); await onRefresh(); onSuccess(`${kind === "company" ? "Company" : "Contact"} request ${status}.`); } catch (e) { onError(e.message); } };
+  const pendingCount = [...requests, ...companyRequests].filter((item) => item.status === "pending").length;
+  return <div className="panel table-panel duplicate-approvals-panel contact-approvals-panel"><div className="panel-head"><div><p className="eyebrow">ADMIN APPROVAL INBOX</p><h2>Approvals</h2><p className="muted">Review duplicate company and contact requests in one queue. Reviewed items remain visible for history but leave the active notification queue.</p></div><span className={`count ${pendingCount ? "approval-count-active" : ""}`}>{pendingCount} pending</span></div>{companyRequests.length > 0 && <section className="approval-section"><div className="approval-section-head"><div><p className="eyebrow">COMPANY REQUESTS</p><h3>Duplicate company approvals</h3></div></div><table className="duplicate-approvals-table"><thead><tr><th>Requested company</th><th>Requested by</th><th>Existing owner</th><th>Status</th><th>Actions</th></tr></thead><tbody>{companyRequests.map((request) => <tr key={request.id}><td><b>{request.requested_name}</b><small>Existing: {request.existing_organization_name || "Company"}</small></td><td>{request.requested_by_name || request.requested_by}</td><td>{request.existing_organization_owner_name || "Placement manager"}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <div className="approval-actions"><button className="text-btn" onClick={() => review("company", request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review("company", request.id, "rejected")}>Reject</button></div>}</td></tr>)}</tbody></table></section>}{requests.length > 0 && <section className="approval-section"><div className="approval-section-head"><div><p className="eyebrow">CONTACT REQUESTS</p><h3>Duplicate contact approvals</h3></div></div><table className="duplicate-approvals-table contact-approvals-table"><thead><tr><th>Requested contact</th><th>Existing contact</th><th>Existing owner</th><th>Requested company</th><th>Requested by</th><th>Status</th><th>Actions</th></tr></thead><tbody>{requests.map((request) => <tr key={request.id}><td><b>{request.requested_name}</b><small>{request.requested_payload?.email || "Contact details submitted"}</small></td><td><b>{request.existing_contact_name || "Existing contact"}</b><small>{request.existing_contact_email || "Contact details protected"}</small></td><td>{request.existing_organization_owner_name || "Placement manager"}</td><td>{request.requested_organization_name || request.existing_organization_name || "Company"}</td><td>{request.requested_by_name || request.requested_by}</td><td><span className={`badge ${request.status}`}>{request.status}</span></td><td>{request.status === "pending" && <div className="approval-actions"><button className="text-btn" onClick={() => review("contact", request.id, "approved")}>Approve</button><button className="delete-btn" onClick={() => review("contact", request.id, "rejected")}>Reject</button></div>}</td></tr>)}</tbody></table></section>}{!requests.length && !companyRequests.length && <div className="empty-state"><h3>No approval requests</h3><p className="muted">New duplicate company or contact requests will appear here.</p></div>}</div>;
 }
 
 function AccessGrantPanel({ users, grants = [], onRefresh, onError, onSuccess }) {
@@ -3420,19 +3444,95 @@ function PlacementEditPanel({ data, users, onRefresh, onError, onSuccess }) {
 }
 
 function PlacementMetricFields({ initial = {} }) {
-  return <><div className="form-grid"><Select label="Pipeline status" name="pipeline_status" defaultValue={initial.pipeline_status || "prospect"}>{placementPipelineStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Select label="Outlook" name="outlook" defaultValue={initial.outlook || "neutral"}>{placementOutlooks.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></div><div className="form-grid"><Select label="Drive status" name="drive_status" defaultValue={initial.drive_status || "not_scheduled"}>{placementDriveStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Field label="Company probability (%)" name="company_probability" type="number" min="0" max="100" defaultValue={initial.company_probability ?? 0} /></div><div className="form-grid"><Field label="Expected company date" name="expected_date" type="date" required={false} defaultValue={initial.expected_date || ""} /><Field label="Drive date" name="drive_date" type="date" required={false} defaultValue={initial.drive_date || ""} /></div><div className="form-grid"><Field label="Last contact date" name="last_contact_date" type="date" required={false} defaultValue={initial.last_contact_date || ""} /><Field label="Next follow-up date" name="next_follow_up_date" type="date" required={false} defaultValue={initial.next_follow_up_date || ""} /></div><div className="form-grid metric-number-grid">{[["companies_acquired", "Companies acquired"], ["drives_conducted", "Drives conducted"], ["offers_received", "Offers received"], ["students_registered", "Students registered"], ["students_selected", "Students selected"], ["students_placed", "Students placed"], ["students_rejected", "Students rejected"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue={initial[name] ?? 0} />)}</div><Field label="Next action" name="next_action" required={false} defaultValue={initial.next_action || ""} placeholder="e.g. Confirm hiring panel and drive slots" /><Field label="Notes" name="notes" required={false} defaultValue={initial.notes || ""} placeholder="Add context for the placement team" /></>;
+  return <><div className="form-grid"><Select label="Pipeline status" name="pipeline_status" defaultValue={initial.pipeline_status || "prospect"}>{placementPipelineStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Select label="Outlook" name="outlook" defaultValue={initial.outlook || "neutral"}>{placementOutlooks.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></div><div className="form-grid"><Select label="Drive status" name="drive_status" defaultValue={initial.drive_status || "not_scheduled"}>{placementDriveStatuses.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select><Field label="Company probability (%)" name="company_probability" type="number" min="0" max="100" defaultValue={initial.company_probability ?? 0} /></div><div className="form-grid"><Field label="Expected company date" name="expected_date" type="date" required={false} defaultValue={initial.expected_date || ""} /><Field label="Drive date" name="drive_date" type="date" required={false} defaultValue={initial.drive_date || ""} /></div><div className="form-grid"><Field label="Last contact date" name="last_contact_date" type="date" required={false} defaultValue={initial.last_contact_date || ""} /><Field label="Next follow-up date" name="next_follow_up_date" type="date" required={false} defaultValue={initial.next_follow_up_date || ""} /></div><div className="form-grid metric-number-grid">{[["companies_acquired", "Companies acquired"], ["drives_conducted", "Drives conducted"], ["offers_received", "Offers received"], ["students_registered", "Students registered"], ["students_selected", "Students selected"], ["students_placed", "Students placed"], ["students_joined", "Students joined"], ["students_rejected", "Students rejected"]].map(([name, label]) => <Field key={name} label={label} name={name} type="number" min="0" defaultValue={initial[name] ?? 0} />)}</div><Field label="Next action" name="next_action" required={false} defaultValue={initial.next_action || ""} placeholder="e.g. Confirm hiring panel and drive slots" /><Field label="Notes" name="notes" required={false} defaultValue={initial.notes || ""} placeholder="Add context for the placement team" /></>;
 }
 
 function metricPayload(form) {
   const number = (name) => Number(form.get(name) || 0);
   const optional = (name) => form.get(name) || null;
-  return { season_id: form.get("season_id"), organization_id: form.get("organization_id"), category_id: optional("category_id"), pipeline_status: form.get("pipeline_status") || "prospect", outlook: form.get("outlook") || "neutral", expected_date: optional("expected_date"), drive_date: optional("drive_date"), last_contact_date: optional("last_contact_date"), next_follow_up_date: optional("next_follow_up_date"), drive_status: form.get("drive_status") || "not_scheduled", company_probability: number("company_probability"), companies_acquired: number("companies_acquired"), drives_conducted: number("drives_conducted"), offers_received: number("offers_received"), students_registered: number("students_registered"), students_selected: number("students_selected"), students_placed: number("students_placed"), students_rejected: number("students_rejected"), next_action: optional("next_action"), notes: optional("notes") };
+  return { season_id: form.get("season_id"), organization_id: form.get("organization_id"), category_id: optional("category_id"), pipeline_status: form.get("pipeline_status") || "prospect", outlook: form.get("outlook") || "neutral", expected_date: optional("expected_date"), drive_date: optional("drive_date"), last_contact_date: optional("last_contact_date"), next_follow_up_date: optional("next_follow_up_date"), drive_status: form.get("drive_status") || "not_scheduled", company_probability: number("company_probability"), companies_acquired: number("companies_acquired"), drives_conducted: number("drives_conducted"), offers_received: number("offers_received"), students_registered: number("students_registered"), students_selected: number("students_selected"), students_placed: number("students_placed"), students_joined: number("students_joined"), students_rejected: number("students_rejected"), next_action: optional("next_action"), notes: optional("notes") };
 }
 
-function PlacementMetrics({ data, organizations, canEdit = true, onRefresh, onError, onSuccess }) {
+function PlacementMetrics({ data, organizations = [], currentUserName, canEdit = true, reviewer = false, onEditCompany, onRefresh, onError, onSuccess }) {
+  const [editing, setEditing] = useState(null);
+  const [reviewing, setReviewing] = useState(null);
+  const [reviewDecision, setReviewDecision] = useState("approved");
+  const [seasonId, setSeasonId] = useState("");
+  const [trackerFilters, setTrackerFilters] = useState({ query: "", category: "", industry: "", owner: "", pipeline: "", outlook: "", drive: "", review: "" });
   const [busy, setBusy] = useState(false);
-  const saveMetric = async (e) => { e.preventDefault(); const form = e.currentTarget; const f = new FormData(form); setBusy(true); try { await apiFetch("/api/placement/metrics", { method: "POST", body: JSON.stringify(metricPayload(f)) }); await onRefresh(); onSuccess("Placement tracking saved."); form.reset(); } catch (e2) { onError(e2.message); } finally { setBusy(false); } };
-  return <div className="dashboard"><div className="section-heading"><div><p className="eyebrow">{canEdit ? "PLACEMENT UPDATES" : "PLACEMENT TRACKER"}</p><h2>{canEdit ? "Update company placement progress" : "Track company placement progress"}</h2><p className="muted">{canEdit ? "Keep each company’s stage, drive readiness, student outcomes, expected dates, and next action up to date. University Admin and Data Analyst reporting updates automatically from these records." : "Review the latest company stages, drive readiness, student outcomes, dates, and follow-up status. Coordinators maintain these records after Placement Managers add company details."}</p></div></div>{canEdit && <form className="panel form-card" onSubmit={saveMetric}><div className="form-grid"><Select label="Placement season" name="season_id"><option value="">Choose season</option>{(data.seasons || []).map((s) => <option value={s.id} key={s.id}>{s.name} · {s.academic_year}</option>)}</Select><Select label="Organization" name="organization_id"><option value="">Choose organization</option>{organizations.map((o) => <option value={o.id} key={o.id}>{o.name}</option>)}</Select></div><Select label="Company category" name="category_id" required={false}><option value="">Use organization category / Uncategorized</option>{(data.categories || []).map((c) => <option value={c.id} key={c.id}>{c.name}</option>)}</Select><PlacementMetricFields /><button className="btn primary" disabled={busy}>Save placement update</button></form>}<PlacementMetricEditorV2 metrics={data.metrics} seasons={data.seasons} organizations={organizations} categories={data.categories} canEdit={canEdit} onRefresh={onRefresh} onError={onError} onSuccess={onSuccess} /></div>;
+  const metrics = data.metrics || [];
+  const activeSeason = (data.seasons || []).find((item) => item.status === "active") || (data.seasons || [])[0];
+  useEffect(() => {
+    if (!seasonId && activeSeason?.id) setSeasonId(String(activeSeason.id));
+  }, [activeSeason?.id, seasonId]);
+  const visibleMetrics = metrics.filter((item) => !seasonId || String(item.season_id) === String(seasonId));
+  const organizationsById = new Map(organizations.map((item) => [String(item.id), item]));
+  const trackerRows = [
+    ...visibleMetrics.map((metric) => ({ ...organizationsById.get(String(metric.organization_id)), ...metric, _tracked: true })),
+    ...organizations.filter((organization) => !visibleMetrics.some((metric) => String(metric.organization_id) === String(organization.id))).map((organization) => ({ ...organization, organization_id: organization.id, season_id: seasonId, category_id: organization.category_id, _tracked: false })),
+  ];
+  const organizationName = (id) => organizationsById.get(String(id))?.name || "Organization";
+  const organizationFor = (id) => organizationsById.get(String(id)) || {};
+  const ownerName = (id) => organizationFor(id).owner_name || currentUserName || (reviewer ? "You" : "Assigned PM");
+  const categoryName = (id) => data.categories?.find((item) => String(item.id) === String(id))?.name || "Uncategorized";
+  const stageLabel = (value) => placementPipelineStatuses.find(([key]) => key === value)?.[1] || "Not started";
+  const reviewLabel = (value) => value === "changes_requested" ? "Changes requested" : value === "pending" ? "Pending review" : "Approved";
+  const industryOptions = [...new Set(trackerRows.map((item) => organizationFor(item.organization_id).industry).filter(Boolean))].sort();
+  const ownerOptions = [...new Set(trackerRows.map((item) => ownerName(item.organization_id)).filter(Boolean))].sort();
+  const filteredTrackerRows = trackerRows.filter((item) => {
+    const organization = organizationFor(item.organization_id);
+    const categoryId = String(item.category_id || organization.category_id || "") || "__none__";
+    const pipeline = item._tracked ? String(item.pipeline_status || "prospect") : "not_started";
+    const outlook = item._tracked ? String(item.outlook || "neutral") : "not_set";
+    const drive = item._tracked ? String(item.drive_status || "not_scheduled") : "not_set";
+    const review = item._tracked ? String(item.review_status || "approved") : "awaiting";
+    const query = trackerFilters.query.trim().toLowerCase();
+    const searchable = [organization.name, organization.industry, organization.city, ownerName(item.organization_id), categoryName(item.category_id || organization.category_id), stageLabel(pipeline)].filter(Boolean).join(" ").toLowerCase();
+    return (!query || searchable.includes(query))
+      && (!trackerFilters.category || trackerFilters.category === categoryId)
+      && (!trackerFilters.industry || trackerFilters.industry === String(organization.industry || ""))
+      && (!trackerFilters.owner || trackerFilters.owner === ownerName(item.organization_id))
+      && (!trackerFilters.pipeline || trackerFilters.pipeline === pipeline)
+      && (!trackerFilters.outlook || trackerFilters.outlook === outlook)
+      && (!trackerFilters.drive || trackerFilters.drive === drive)
+      && (!trackerFilters.review || trackerFilters.review === review);
+  });
+  const trackerFiltersActive = Object.values(trackerFilters).some(Boolean);
+  const saveMetric = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await apiFetch("/api/placement/metrics", { method: "POST", body: JSON.stringify(metricPayload(new FormData(event.currentTarget))) });
+      await onRefresh();
+      onSuccess(editing?.id ? "Placement update resubmitted for review." : "Placement update submitted for review.");
+      setEditing(null);
+    } catch (error) {
+      onError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveReview = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      await apiFetch(`/api/placement/metrics/${reviewing.id}/review`, { method: "PATCH", body: JSON.stringify({ status: form.get("status"), review_note: form.get("review_note") || null }) });
+      await onRefresh();
+      onSuccess(form.get("status") === "approved" ? "Placement update approved." : "Changes requested from the coordinator.");
+      setReviewing(null);
+    } catch (error) {
+      onError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <div className="dashboard placement-tracker-page">
+    <div className="section-heading placement-tracker-heading"><div><p className="eyebrow">{canEdit ? "PLACEMENT OPERATIONS" : "PLACEMENT REVIEW"}</p><h2>{canEdit ? "Update PM-registered companies" : "Review coordinator updates"}</h2><p className="muted">{canEdit ? "The company, category, CTC, industry, and owner come from the Placement Manager. You only add the next operational placement update." : "The company context comes from your own registration. Review the coordinator’s operational fields and send back a specific correction when needed."}</p></div><label className="tracker-season-filter"><span>Placement season</span><select value={seasonId} onChange={(event) => setSeasonId(event.target.value)}><option value="">All seasons</option>{(data.seasons || []).map((season) => <option value={season.id} key={season.id}>{season.name} · {season.academic_year}</option>)}</select></label></div>
+    <div className="panel table-panel tracker-table-panel"><div className="panel-head"><div><p className="eyebrow">COMPANY WORK QUEUE</p><h3>{reviewer ? "Your registered companies" : "PM companies awaiting operations"}</h3><span className="muted">{reviewer ? "Every company you registered stays visible, including ones waiting for the first coordinator update." : "PM registration context stays visible beside the operational placement update."}</span></div><span className="count">{trackerFiltersActive ? `${filteredTrackerRows.length} of ${trackerRows.length} companies` : `${trackerRows.length} compan${trackerRows.length === 1 ? "y" : "ies"}`}</span></div><div className="tracker-filters" aria-label="Filter placement tracker"><label className="tracker-filter-search"><Search size={15} /><input value={trackerFilters.query} onChange={(event) => setTrackerFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Search company, industry, owner…" /></label><label className="tracker-filter-field"><span>Category</span><select value={trackerFilters.category} onChange={(event) => setTrackerFilters((current) => ({ ...current, category: event.target.value }))}><option value="">All categories</option><option value="__none__">Uncategorized</option>{(data.categories || []).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="tracker-filter-field"><span>Industry</span><select value={trackerFilters.industry} onChange={(event) => setTrackerFilters((current) => ({ ...current, industry: event.target.value }))}><option value="">All industries</option>{industryOptions.map((industry) => <option value={industry} key={industry}>{industry}</option>)}</select></label><label className="tracker-filter-field"><span>Owner</span><select value={trackerFilters.owner} onChange={(event) => setTrackerFilters((current) => ({ ...current, owner: event.target.value }))}><option value="">All owners</option>{ownerOptions.map((owner) => <option value={owner} key={owner}>{owner}</option>)}</select></label><label className="tracker-filter-field"><span>Pipeline</span><select value={trackerFilters.pipeline} onChange={(event) => setTrackerFilters((current) => ({ ...current, pipeline: event.target.value }))}><option value="">All pipeline stages</option><option value="not_started">Not started</option>{placementPipelineStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="tracker-filter-field"><span>Outlook</span><select value={trackerFilters.outlook} onChange={(event) => setTrackerFilters((current) => ({ ...current, outlook: event.target.value }))}><option value="">All outlooks</option>{placementOutlooks.map(([key, label]) => <option value={key} key={key}>{label}</option>)}<option value="not_set">Not set</option></select></label><label className="tracker-filter-field"><span>Drive</span><select value={trackerFilters.drive} onChange={(event) => setTrackerFilters((current) => ({ ...current, drive: event.target.value }))}><option value="">All drive statuses</option><option value="not_set">Not set</option>{placementDriveStatuses.map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label className="tracker-filter-field"><span>Review</span><select value={trackerFilters.review} onChange={(event) => setTrackerFilters((current) => ({ ...current, review: event.target.value }))}><option value="">All review statuses</option><option value="awaiting">Awaiting update</option><option value="pending">Pending review</option><option value="changes_requested">Changes requested</option><option value="approved">Approved</option></select></label>{trackerFiltersActive && <button type="button" className="tracker-filter-clear" onClick={() => setTrackerFilters({ query: "", category: "", industry: "", owner: "", pipeline: "", outlook: "", drive: "", review: "" })}>Clear filters</button>}</div><div className="analytics-grid-scroll"><table className="tracker-table"><thead><tr><th>Company</th><th>Category</th><th>Industry</th><th>Expected CTC</th><th>Location</th><th>Owner</th><th>Season</th><th>Pipeline</th><th>Outlook</th><th>Drive</th><th>Expected date</th><th>Placed</th><th>Review</th><th>Action</th></tr></thead><tbody>{filteredTrackerRows.map((item) => <tr key={`${item.organization_id}-${item.season_id || "all"}`}><td><b>{organizationName(item.organization_id)}</b></td><td>{categoryName(item.category_id || organizationFor(item.organization_id).category_id)}</td><td>{organizationFor(item.organization_id).industry || "—"}</td><td>{organizationFor(item.organization_id).expected_ctc || "—"}</td><td>{organizationFor(item.organization_id).city || "—"}</td><td>{ownerName(item.organization_id)}</td><td>{data.seasons?.find((season) => String(season.id) === String(item.season_id))?.name || "Choose season"}</td><td>{item._tracked ? <span className={`pipeline-status ${String(item.pipeline_status || "prospect").replaceAll("_", "-")}`}>{stageLabel(item.pipeline_status)}</span> : <span className="tracker-awaiting">Not started</span>}</td><td>{item._tracked ? <span className={`outlook-pill ${item.outlook || "neutral"}`}>{item.outlook || "neutral"}</span> : "—"}</td><td>{item._tracked ? <span className={`drive-pill ${item.drive_status || "not_scheduled"}`}>{(item.drive_status || "not_scheduled").replaceAll("_", " ")}</span> : "—"}</td><td>{item.expected_date || "—"}</td><td>{item.students_placed || 0}</td><td>{item._tracked ? <><span className={`review-pill ${item.review_status || "approved"}`}>{reviewLabel(item.review_status)}</span>{item.review_note && <small className="review-note">{item.review_note}</small>}</> : <span className="review-pill pending">Awaiting update</span>}</td><td><div className="tracker-actions">{canEdit && <button type="button" className="text-btn" onClick={() => setEditing(item)}><Pencil size={13} />{item._tracked ? "Edit" : "Start update"}</button>}{reviewer && item._tracked && <button type="button" className="text-btn" onClick={() => { setReviewing(item); setReviewDecision(item.review_status === "changes_requested" ? "changes_requested" : "approved"); }}>Review<ChevronRight size={13} /></button>}</div></td></tr>)}</tbody></table>{!filteredTrackerRows.length && <div className="empty-state"><h3>{trackerRows.length && trackerFiltersActive ? "No companies match these filters" : reviewer ? "No PM companies registered yet" : "No companies in your scope"}</h3><p className="muted">{trackerRows.length && trackerFiltersActive ? "Try clearing a filter or changing your search." : "The tracker will populate when a Placement Manager registers a company."}</p></div>}</div></div>
+    {canEdit && editing && <Modal title={`${editing.id ? "Edit" : "Start update for"} ${organizationName(editing.organization_id)}`} onClose={() => setEditing(null)}><form key={editing.id || `new-placement-${editing.organization_id}`} onSubmit={saveMetric}><div className="tracker-modal-context"><div className="tracker-company-context"><b>{organizationName(editing.organization_id)}</b><span>{categoryName(editing.category_id || organizationFor(editing.organization_id).category_id)} · {organizationFor(editing.organization_id).expected_ctc || "CTC not set"}</span><span>{organizationFor(editing.organization_id).industry || "Industry not set"} · {organizationFor(editing.organization_id).city || "City not set"}</span>{onEditCompany && <button type="button" className="text-btn" onClick={() => { setEditing(null); onEditCompany(organizationFor(editing.organization_id)); }}><Pencil size={13} />Edit company registration</button>}</div><span>{editing.id ? "Update the operational fields below. You can correct PM registration details separately." : "This company was registered by the PM. Add the first operational placement update."}</span>{editing.review_note && <small>Manager note: {editing.review_note}</small>}</div><input type="hidden" name="organization_id" value={editing.organization_id || ""} /><input type="hidden" name="category_id" value={editing.category_id || organizationFor(editing.organization_id).category_id || ""} /><Select label="Placement season" name="season_id" defaultValue={editing.season_id || seasonId || ""}><option value="">Choose season</option>{(data.seasons || []).map((season) => <option value={season.id} key={season.id}>{season.name} · {season.academic_year}</option>)}</Select><PlacementMetricFields initial={editing} /><div className="form-actions"><button type="button" className="btn secondary" onClick={() => setEditing(null)}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing.id ? "Resubmit update" : "Submit update"}</button></div></form></Modal>}
+    {reviewer && reviewing && <Modal title={`Review ${organizationName(reviewing.organization_id)}`} onClose={() => setReviewing(null)}><form onSubmit={saveReview}><div className="review-summary"><span className="pipeline-status">{stageLabel(reviewing.pipeline_status)}</span><span className={`outlook-pill ${reviewing.outlook || "neutral"}`}>{reviewing.outlook || "neutral"}</span><span>{reviewing.students_placed || 0} students placed</span></div><div className="review-details-grid"><span><b>PM category</b>{categoryName(reviewing.category_id || organizationFor(reviewing.organization_id).category_id)}</span><span><b>PM expected CTC</b>{organizationFor(reviewing.organization_id).expected_ctc || "Not set"}</span><span><b>Expected date</b>{reviewing.expected_date || "—"}</span><span><b>Drive</b>{reviewing.drive_date || "Not scheduled"}</span><span><b>Students registered</b>{reviewing.students_registered || 0}</span><span><b>Selected / offers</b>{reviewing.students_selected || 0} / {reviewing.offers_received || 0}</span><span><b>Next follow-up</b>{reviewing.next_follow_up_date || "—"}</span><span><b>Next action</b>{reviewing.next_action || "Not recorded"}</span></div>{reviewing.notes && <div className="review-notes"><b>Coordinator update notes</b><p>{reviewing.notes}</p></div>}<Select label="Decision" name="status" value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value)}><option value="approved">Approve update</option><option value="changes_requested">Request changes</option></Select><label className="field"><span>Review note</span><textarea name="review_note" defaultValue={reviewing.review_note || ""} required={reviewDecision === "changes_requested"} placeholder="Tell the coordinator exactly what to update…" /></label><div className="form-actions"><button type="button" className="btn secondary" onClick={() => setReviewing(null)}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? "Saving…" : "Save review"}</button></div></form></Modal>}
+  </div>;
 }
 
 function PlacementMetricEditorV2({ metrics, seasons, organizations, categories, canEdit = true, onRefresh, onError, onSuccess }) {
