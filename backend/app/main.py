@@ -2358,8 +2358,16 @@ PLACEMENT_REVIEW_FIELDS = {"review_status", "review_note", "reviewed_by", "revie
 
 
 def is_missing_placement_review_column(error: Exception) -> bool:
-    message = str(error)
-    return "Could not find" in message and any(f"'{field}' column" in message for field in PLACEMENT_REVIEW_FIELDS)
+    message = str(error).casefold()
+    mentions_review_field = any(
+        field in message
+        for field in PLACEMENT_REVIEW_FIELDS
+    )
+    mentions_missing_schema = any(
+        marker in message
+        for marker in ("could not find", "schema cache", "does not exist", "undefined column", "unknown column")
+    )
+    return mentions_review_field and mentions_missing_schema
 
 
 def write_placement_metric(data: dict[str, Any], metric_id: str | None = None) -> dict[str, Any]:
@@ -2373,8 +2381,8 @@ def write_placement_metric(data: dict[str, Any], metric_id: str | None = None) -
     except Exception as error:
         if not is_missing_placement_review_column(error):
             raise
-        logger.warning("Placement review migration is not deployed; saving metric without review metadata")
-        rows = execute({key: value for key, value in data.items() if key not in PLACEMENT_REVIEW_FIELDS})
+        logger.error("Placement review migration is not deployed; refusing to save a metric without review metadata")
+        fail("Placement review is not available until migration 20260831000024 is applied", 503)
     if not rows:
         fail("Placement update could not be saved", 409)
     return rows[0]
@@ -2418,17 +2426,26 @@ def review_metric(metric_id: str, payload: MetricReviewIn, user=Depends(require_
     if not rows:
         fail("Placement update not found", 404)
     metric = rows[0]
+    if "review_status" not in metric:
+        fail("Apply migration 20260831000024 before reviewing placement updates", 503)
+    if metric.get("review_status") != "pending":
+        fail("Only placement updates pending review can be reviewed", 409)
+    if payload.status == "changes_requested" and not (payload.review_note or "").strip():
+        fail("A review note is required when requesting changes", 400)
+    review_query = (db.table("placement_metrics")
+        .update({"review_status": payload.status, "review_note": payload.review_note, "reviewed_by": user["id"], "reviewed_at": now().isoformat()})
+        .eq("id", metric_id).eq("university_id", user.get("university_id"))
+        .eq("placement_manager_id", user["id"]).eq("review_status", "pending"))
+    if metric.get("updated_at"):
+        review_query = review_query.eq("updated_at", metric["updated_at"])
     try:
-        updated_rows = (db.table("placement_metrics")
-            .update({"review_status": payload.status, "review_note": payload.review_note, "reviewed_by": user["id"], "reviewed_at": now().isoformat()})
-            .eq("id", metric_id).eq("placement_manager_id", user["id"])
-            .execute().data or [])
+        updated_rows = review_query.execute().data or []
     except Exception as error:
         if is_missing_placement_review_column(error):
             fail("Apply migration 20260831000024 before reviewing placement updates", 503)
         raise
     if not updated_rows:
-        fail("Placement update could not be reviewed", 409)
+        fail("This placement update changed while you were reviewing it. Refresh and review the latest update.", 409)
     coordinator_id = metric.get("updated_by")
     coordinator = get_profile(str(coordinator_id)) if coordinator_id else None
     if not coordinator or coordinator.get("role") != "coordinator":
