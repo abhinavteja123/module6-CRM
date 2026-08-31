@@ -870,10 +870,9 @@ class MetricIn(BaseModel):
     drives_conducted: int = Field(default=0, ge=0)
     offers_received: int = Field(default=0, ge=0)
     students_placed: int = Field(default=0, ge=0)
-    students_joined: int = Field(default=0, ge=0)
     pipeline_status: Literal[
         "prospect", "outreach", "in_talks", "discussion", "proposal_shared",
-        "negotiation", "drive_scheduled", "drive_completed", "offer_stage",
+        "negotiation", "drive_scheduled", "drive_ongoing", "drive_completed", "offer_stage",
         "placed", "joined", "on_hold", "cancelled"
     ] = "prospect"
     outlook: Literal["positive", "neutral", "negative"] = "neutral"
@@ -1708,6 +1707,23 @@ def update_university_contract(contract_id: str, payload: UniversityContractUpda
     return _contract_rows_with_documents([updated])[0]
 
 
+@app.delete("/api/admin/university-contracts/{contract_id}")
+def delete_university_contract(contract_id: str, user=Depends(require_roles("super_admin"))):
+    existing = db.table("university_contracts").select("id,university_id").eq("id", contract_id).limit(1).execute().data or []
+    if not existing:
+        fail("Contract record not found", 404)
+    documents = db.table("university_contract_documents").select("storage_path").eq("contract_id", contract_id).execute().data or []
+    try:
+        if documents:
+            db.storage_bucket(CONTRACT_DOCUMENT_BUCKET).remove([document["storage_path"] for document in documents])
+    except Exception:
+        logger.exception("Could not remove university contract documents")
+        fail("The contract documents could not be removed from private storage", 503)
+    db.table("university_contracts").delete().eq("id", contract_id).execute()
+    record_audit(user, "deleted", "university_contract", contract_id, existing[0].get("university_id"), {})
+    return {"ok": True, "id": contract_id}
+
+
 @app.post("/api/admin/university-contracts/{contract_id}/documents", status_code=201)
 async def upload_university_contract_document(
     contract_id: str,
@@ -1752,6 +1768,24 @@ async def upload_university_contract_document(
         fail("The document could not be saved. Confirm the private storage bucket is deployed.", 503)
     record_audit(user, "uploaded", "university_contract_document", created.get("id"), existing[0].get("university_id"), {"document_type": document_type, "original_name": original_name})
     return created
+
+
+@app.delete("/api/admin/university-contract-documents/{document_id}")
+def delete_university_contract_document(document_id: str, user=Depends(require_roles("super_admin"))):
+    documents = db.table("university_contract_documents").select("id,contract_id,storage_path").eq("id", document_id).limit(1).execute().data or []
+    if not documents:
+        fail("Contract document not found", 404)
+    contract = db.table("university_contracts").select("university_id").eq("id", documents[0]["contract_id"]).limit(1).execute().data or []
+    if not contract:
+        fail("Contract record not found", 404)
+    try:
+        db.storage_bucket(CONTRACT_DOCUMENT_BUCKET).remove([documents[0]["storage_path"]])
+    except Exception:
+        logger.exception("Could not remove university contract document")
+        fail("The document could not be removed from private storage", 503)
+    db.table("university_contract_documents").delete().eq("id", document_id).execute()
+    record_audit(user, "deleted", "university_contract_document", document_id, contract[0].get("university_id"), {})
+    return {"ok": True, "id": document_id}
 
 
 @app.get("/api/admin/university-contract-documents/{document_id}/url")
@@ -2314,7 +2348,7 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     elif user.get("role") == "coordinator":
         query = query.in_("placement_manager_id", team_ids(user))
     rows = query.order("updated_at", desc=True).execute().data or []
-    keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed", "students_joined")
+    keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed")
     target_query = university_rows("placement_targets", user)
     if season_id:
         target_query = target_query.eq("season_id", season_id)
@@ -2327,7 +2361,7 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
     target_keys = ("companies_target",)
     target_totals = {key: sum(int(row.get(key) or 0) for row in targets) for key in target_keys}
     today = date.today()
-    status_labels = {"prospect": "Prospect", "outreach": "Outreach", "in_talks": "In talks", "discussion": "Discussion", "proposal_shared": "Proposal shared", "negotiation": "Negotiation", "drive_scheduled": "Drive scheduled", "drive_completed": "Drive completed", "offer_stage": "Offer stage", "placed": "Placed", "joined": "Joined", "on_hold": "On hold", "cancelled": "Cancelled"}
+    status_labels = {"prospect": "Prospect", "outreach": "Outreach", "in_talks": "In progress", "discussion": "Discussion", "proposal_shared": "Proposal shared", "negotiation": "Negotiation", "drive_scheduled": "Drive scheduled", "drive_ongoing": "Drive ongoing", "drive_completed": "Drive completed", "offer_stage": "Offer stage", "placed": "Placed", "joined": "Joined", "on_hold": "On hold", "cancelled": "Cancelled"}
     outlook_labels = {"positive": "Positive", "neutral": "Neutral", "negative": "Negative"}
     drive_labels = {"not_scheduled": "Not scheduled", "tentative": "Tentative", "scheduled": "Scheduled", "completed": "Completed", "cancelled": "Cancelled"}
     org_ids = list({str(row.get("organization_id")) for row in rows if row.get("organization_id")})
@@ -2464,7 +2498,7 @@ def placement_analytics(season_id: str | None = None, user=Depends(require_roles
         "targets": targets,
         "summary": {
             "companies_in_pipeline": sum(1 for row in rows if row.get("pipeline_status") != "cancelled"),
-            "active_pipeline": sum(1 for row in rows if row.get("pipeline_status") not in {"cancelled", "joined", "placed"}),
+            "active_pipeline": sum(1 for row in rows if row.get("pipeline_status") not in {"cancelled", "placed"}),
             "cancelled": status_counts.get("cancelled", 0),
             "overdue_followups": overdue_followups,
             "expected_next_30_days": upcoming_dates,
@@ -2633,7 +2667,7 @@ def build_analytics_query_context(analytics: dict[str, Any], filters: dict[str, 
         return True
 
     rows = [row for row in source_rows if matches(row)]
-    metric_keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed", "students_joined")
+    metric_keys = ("companies_acquired", "drives_conducted", "offers_received", "students_placed")
     target_keys = ("companies_target",)
     totals = {key: sum(int(row.get(key) or 0) for row in rows) for key in metric_keys}
     targets = analytics.get("targets") or []
@@ -2653,7 +2687,7 @@ def build_analytics_query_context(analytics: dict[str, Any], filters: dict[str, 
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
             group_id = str(row.get(key) or "unspecified")
-            item = grouped.setdefault(group_id, {"label": row.get(label_key) or "Unspecified", "companies_acquired": 0, "drives_conducted": 0, "offers_received": 0, "students_placed": 0, "students_joined": 0})
+            item = grouped.setdefault(group_id, {"label": row.get(label_key) or "Unspecified", "companies_acquired": 0, "drives_conducted": 0, "offers_received": 0, "students_placed": 0})
             for metric in metric_keys:
                 item[metric] += int(row.get(metric) or 0)
         return sorted(grouped.values(), key=lambda item: (item["students_placed"], item["companies_acquired"]), reverse=True)[:10]
@@ -2680,11 +2714,10 @@ def build_analytics_query_context(analytics: dict[str, Any], filters: dict[str, 
             "students_selected": row.get("students_selected") or 0,
             "offers_received": row.get("offers_received") or 0,
             "students_placed": row.get("students_placed") or 0,
-            "students_joined": row.get("students_joined") or 0,
             "next_action": redact_text_for_ai(row.get("next_action"), 220),
         })
     summary = {
-        "active_pipeline": sum(1 for row in rows if row.get("pipeline_status") not in {"cancelled", "joined", "placed"}),
+        "active_pipeline": sum(1 for row in rows if row.get("pipeline_status") not in {"cancelled", "placed", "joined"}),
         "companies_in_pipeline": sum(1 for row in rows if row.get("pipeline_status") != "cancelled"),
         "overdue_followups": sum(1 for row in rows if row.get("next_follow_up_date") and str(row["next_follow_up_date"])[:10] < today.isoformat() and row.get("pipeline_status") != "cancelled"),
         "expected_next_30_days": sum(1 for row in rows if in_next_30(row.get("expected_date")) and row.get("pipeline_status") != "cancelled"),
@@ -2741,7 +2774,7 @@ def make_deterministic_nlp_answer(question: str, context: dict[str, Any]) -> dic
             answer += f" The most relevant records to review first are {names}."
         answer += " Prioritize a dated next action for each one and verify the latest employer note before changing its stage."
     elif any(word in question_lower for word in ("target", "track", "progress", "acquisition")):
-        answer = f"The view shows {totals.get('companies_acquired', 0)} companies acquired against a target of {targets.get('companies_target', 0)}, which is {pct(totals.get('companies_acquired', 0), targets.get('companies_target', 0))} of target. It also shows {totals.get('drives_conducted', 0)} drives, {totals.get('offers_received', 0)} offers, {totals.get('students_placed', 0)} placed students, and {totals.get('students_joined', 0)} joined students."
+        answer = f"The view shows {totals.get('companies_acquired', 0)} companies acquired against a target of {targets.get('companies_target', 0)}, which is {pct(totals.get('companies_acquired', 0), targets.get('companies_target', 0))} of target. It also shows {totals.get('drives_conducted', 0)} drives, {totals.get('offers_received', 0)} offers, and {totals.get('students_placed', 0)} placed students."
     elif any(word in question_lower for word in ("manager", "owner", "team")):
         top = (context.get("by_manager") or [None])[0]
         answer = f"Across {record_count} records, the current portfolio has {summary.get('active_pipeline', 0)} active opportunities."
@@ -2763,13 +2796,13 @@ def make_deterministic_nlp_answer(question: str, context: dict[str, Any]) -> dic
             references.append(str(top.get("label")))
             answer += f" {top.get('label')} leads by placed students with {top.get('students_placed', 0)} placed across {top.get('companies_acquired', 0)} acquired companies."
         answer += " Review the city comparison alongside drive readiness to identify the next operational hotspot."
-    elif any(word in question_lower for word in ("pipeline", "stage", "journey", "funnel", "conversion", "outcome", "placed", "joined", "offer")):
+    elif any(word in question_lower for word in ("pipeline", "stage", "journey", "funnel", "conversion", "outcome", "placed", "offer")):
         status_counts = context.get("status_counts") or {}
         top_stage = max(status_counts.items(), key=lambda item: item[1], default=("prospect", 0))
-        answer = f"The filtered pipeline contains {record_count} records, with {top_stage[1]} currently in {top_stage[0].replace('_', ' ')}. The outcome totals are {totals.get('offers_received', 0)} offers, {totals.get('students_placed', 0)} placed, and {totals.get('students_joined', 0)} joined, giving placed-to-joined conversion of {pct(totals.get('students_joined', 0), totals.get('students_placed', 0))}."
+        answer = f"The filtered pipeline contains {record_count} records, with {top_stage[1]} currently in {top_stage[0].replace('_', ' ')}. The outcome totals are {totals.get('offers_received', 0)} offers and {totals.get('students_placed', 0)} placed."
         answer += " Focus on the largest active stage and its next-action coverage to improve movement through the funnel."
     else:
-        answer = f"The current filtered view contains {record_count} placement records and {summary.get('active_pipeline', 0)} active opportunities. It has {totals.get('companies_acquired', 0)} acquired companies, {totals.get('students_placed', 0)} placed students, and {totals.get('students_joined', 0)} joined students."
+        answer = f"The current filtered view contains {record_count} placement records and {summary.get('active_pipeline', 0)} active opportunities. It has {totals.get('companies_acquired', 0)} acquired companies and {totals.get('students_placed', 0)} placed students."
         if summary.get("overdue_followups") or summary.get("negative_outlook"):
             answer += f" The main attention signals are {summary.get('overdue_followups', 0)} overdue follow-ups and {summary.get('negative_outlook', 0)} negative-outlook records."
         else:
@@ -2860,7 +2893,6 @@ def placement_analytics_insights(season_id: str | None = None, user=Depends(requ
             "students_selected": row.get("students_selected") or 0,
             "offers_received": row.get("offers_received") or 0,
             "students_placed": row.get("students_placed") or 0,
-            "students_joined": row.get("students_joined") or 0,
             "note_excerpt": redact_text_for_ai(row.get("notes")) if allow_crm_text else None,
         })
     context_reports = []

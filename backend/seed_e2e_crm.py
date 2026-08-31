@@ -81,7 +81,7 @@ DESIGNATIONS = [
 
 PIPELINE_STATUSES = [
     "prospect", "outreach", "in_talks", "discussion", "proposal_shared", "negotiation",
-    "drive_scheduled", "drive_completed", "offer_stage", "placed", "joined", "on_hold", "cancelled",
+    "drive_scheduled", "drive_ongoing", "drive_completed", "offer_stage", "placed", "on_hold", "cancelled",
 ]
 OUTLOOKS = ["positive", "neutral", "positive", "negative", "positive", "neutral"]
 DRIVE_STATUSES = ["not_scheduled", "tentative", "scheduled", "completed", "cancelled", "scheduled"]
@@ -305,30 +305,26 @@ def metric_values(index: int, season_index: int) -> dict[str, Any]:
         selected = max(1, round(registered * (0.32 + ((index + season_index) % 5) * 0.08)))
     selected = min(registered, selected)
     offers = (selected // 5) if stage not in {"prospect", "outreach", "in_talks", "discussion", "cancelled"} else 0
-    placed = max(0, offers - (index % 3 if stage in {"placed", "joined"} else 0))
-    joined = max(0, placed - (index % 2 if stage == "joined" else placed if stage != "joined" else 0))
-    if stage == "joined":
-        joined = max(1, placed)
+    placed = max(0, offers - (index % 3 if stage == "placed" else 0))
     drive_status = {
         "prospect": "not_scheduled", "outreach": "not_scheduled", "in_talks": "tentative",
         "discussion": "tentative", "proposal_shared": "scheduled", "negotiation": "scheduled",
-        "drive_scheduled": "scheduled", "drive_completed": "completed", "offer_stage": "completed",
+        "drive_scheduled": "scheduled", "drive_ongoing": "scheduled", "drive_completed": "completed", "offer_stage": "completed",
         "placed": "completed", "joined": "completed", "on_hold": "cancelled", "cancelled": "cancelled",
     }[stage]
     expected_date = today + timedelta(days=((index * 13 + season_index * 19) % 151) - 70)
     follow_up = today + timedelta(days=((index * 7 + season_index * 11) % 43) - 18)
     last_contact = today - timedelta(days=((index * 5 + season_index * 3) % 46))
     next_action = None if index % 11 == 0 else (
-        "Confirm interview panel and student shortlist" if stage not in {"joined", "cancelled"}
+        "Confirm interview panel and student shortlist" if stage != "cancelled"
         else "Share closure notes and alumni conversion update"
     )
     notes = None if index % 11 == 0 else f"{SEED_MARKER} | scenario metric for company {index:03d}, cycle {season_index + 1}."
     return {
         "companies_acquired": 0 if stage in {"prospect", "cancelled"} else 1,
-        "drives_conducted": 1 if stage in {"drive_completed", "offer_stage", "placed", "joined"} else 0,
+        "drives_conducted": 1 if stage in {"drive_completed", "offer_stage", "placed"} else 0,
         "offers_received": offers,
         "students_placed": placed,
-        "students_joined": joined,
         "pipeline_status": stage,
         "outlook": OUTLOOKS[(index + season_index) % len(OUTLOOKS)],
         "expected_date": expected_date.isoformat(),
@@ -484,7 +480,7 @@ def ensure_kanban(organizations: list[dict[str, Any]], managers: list[dict[str, 
         if marker in existing_markers:
             continue
         status = PIPELINE_STATUSES[(index - 1) % len(PIPELINE_STATUSES)]
-        group = "won" if status in {"placed", "joined"} else "lost" if status == "cancelled" else "proposal" if status in {"proposal_shared", "negotiation", "drive_scheduled", "drive_completed", "offer_stage"} else "meeting" if status in {"in_talks", "discussion"} else "prospect"
+        group = "won" if status == "placed" else "lost" if status == "cancelled" else "proposal" if status in {"proposal_shared", "negotiation", "drive_scheduled", "drive_ongoing", "drive_completed", "offer_stage"} else "meeting" if status in {"in_talks", "discussion"} else "prospect"
         stage = stage_map[str(organization["placement_manager_id"])][group]
         cards.append({
             "stage_id": stage["id"],

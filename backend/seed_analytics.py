@@ -191,7 +191,7 @@ def ensure_targets(university_id: str, admin_id: str, seasons: list[dict], categ
 
 
 def ensure_metrics(university_id: str, seasons: list[dict], categories: list[dict], organizations: list[dict]) -> int:
-    statuses = ["prospect", "outreach", "in_talks", "negotiation", "drive_scheduled", "drive_completed", "offer_stage", "placed", "joined", "on_hold", "cancelled", "discussion"]
+    statuses = ["prospect", "outreach", "in_talks", "negotiation", "drive_scheduled", "drive_ongoing", "drive_completed", "offer_stage", "placed", "on_hold", "cancelled", "discussion"]
     outlooks = ["neutral", "positive", "positive", "neutral", "positive", "positive", "positive", "positive", "positive", "negative", "negative", "neutral"]
     drives = ["not_scheduled", "tentative", "scheduled", "scheduled", "scheduled", "completed", "completed", "completed", "completed", "cancelled", "cancelled", "tentative"]
     existing = [item for item in get_rows("placement_metrics") if str(item.get("university_id")) == university_id]
@@ -209,7 +209,6 @@ def ensure_metrics(university_id: str, seasons: list[dict], categories: list[dic
         selected = max(0, registered - (index % 4) * 3)
         offers = max(0, selected // 3)
         placed = max(0, offers - (index % 3))
-        joined = max(0, placed - (index % 2))
         expected_date = today + timedelta(days=(index - 5) * 9)
         follow_up = today + timedelta(days=(index % 7) - 3)
         db.table("placement_metrics").insert({
@@ -219,10 +218,9 @@ def ensure_metrics(university_id: str, seasons: list[dict], categories: list[dic
             "placement_manager_id": manager_id,
             "category_id": organization.get("category_id") or categories[index % len(categories)]["id"],
             "companies_acquired": 1 if status not in {"prospect", "cancelled"} else 0,
-            "drives_conducted": 1 if status in {"drive_completed", "offer_stage", "placed", "joined"} else 0,
+            "drives_conducted": 1 if status in {"drive_completed", "offer_stage", "placed"} else 0,
             "offers_received": offers,
             "students_placed": placed,
-            "students_joined": joined,
             "pipeline_status": status,
             "outlook": outlooks[index % len(outlooks)],
             "expected_date": expected_date.isoformat(),
@@ -234,7 +232,7 @@ def ensure_metrics(university_id: str, seasons: list[dict], categories: list[dic
             "students_registered": registered,
             "students_selected": selected,
             "students_rejected": max(0, registered - selected),
-            "next_action": "Confirm hiring panel and drive slots" if status not in {"joined", "cancelled"} else "Share closure summary with the team",
+            "next_action": "Confirm hiring panel and drive slots" if status != "cancelled" else "Share closure summary with the team",
             "notes": f"{SEED_MARKER}: pipeline scenario {index + 1}",
         }).execute()
         keys.add(key)

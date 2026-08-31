@@ -41,7 +41,8 @@ async function request(path, options = {}, token = getAccessToken()) {
   const headers = {
     ...(options.headers || {}),
   };
-  if (options.body !== undefined && !headers["Content-Type"]) {
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (options.body !== undefined && !headers["Content-Type"] && !isFormData) {
     headers["Content-Type"] = "application/json";
   }
   if (token) headers.Authorization = `Bearer ${token}`;
