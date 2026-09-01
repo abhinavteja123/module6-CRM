@@ -30,12 +30,17 @@ The hero also provides an Ask analytics view. It accepts a plain-language questi
 The visual flow is:
 
 1. KPI strip: targets, actuals, achievement, and conversion.
-2. Target delivery: progress by the active filter context.
-3. Critical work: overdue follow-ups, upcoming drives, negative outlook, stalled records, and missing next actions.
-4. Pipeline health: stage distribution with clickable stage filtering.
-5. Outcomes: registered-to-joined funnel and conversion rates.
-6. Comparisons: manager, category, city, and cycle panels.
-7. Detail grid: contained scrollable records with expandable details.
+2. Comparisons: manager, category, industry, and city panels.
+3. Target delivery: progress by the active filter context.
+4. Manager target achievement: category-grouped Target and Achievement values for each manager.
+5. Pipeline details: category-grouped Prospect, Positive, and Negative counts for each manager.
+6. Category pipeline: target, tracked records, stage distribution, and outcomes.
+7. Critical work: overdue follow-ups, upcoming drives, negative outlook, stalled records, and missing next actions.
+8. Pipeline health: stage distribution with clickable stage filtering.
+9. Outcomes: registered-to-joined funnel and conversion rates.
+10. Detail grid: contained scrollable records with expandable details.
+
+The manager target-achievement and pipeline-detail matrices are derived from the same filtered placement rows and admin-declared targets as the rest of the canvas. This keeps the reference-style cross-tabs synchronized with Cycle, Manager, Category, and the remaining global slicers.
 
 Sections are compact and collapsible. Desktop keeps slicers visible; smaller screens use a Filters drawer. Charts remain CSS-based so the page has no new chart runtime dependency.
 
