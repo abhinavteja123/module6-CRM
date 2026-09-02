@@ -13,7 +13,7 @@ The UI uses FastAPI for authentication and all application data access. Supabase
 
 ## Supabase database setup
 
-Apply every versioned migration in `supabase/migrations/`, through the latest `20260829000021_admin_managed_industries.sql`. The database is private to the FastAPI service-role connection; the browser does not query Supabase directly.
+Apply every versioned migration in `supabase/migrations/`, through the latest payment and default-industry migrations (`20260901000025_contract_payment_amounts.sql` and `20260901000026_default_placement_industries.sql`). The database is private to the FastAPI service-role connection; the browser does not query Supabase directly.
 
 1. Configure `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`.
 2. Apply all migrations, including `20260825000008_application_auth_and_roles.sql`.

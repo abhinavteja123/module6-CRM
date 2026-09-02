@@ -154,6 +154,30 @@ DEFAULT_KANBAN_STAGES = [
     {"name": "Closed Lost", "color": "#ef4444", "position": 4},
 ]
 
+DEFAULT_PLACEMENT_INDUSTRIES = [
+    ("Information Technology", "Software, IT services, and technology employers"),
+    ("Consulting", "Management, strategy, and professional services"),
+    ("Finance & Banking", "Banking, fintech, insurance, and financial services"),
+    ("Healthcare", "Healthcare, pharmaceuticals, and life sciences"),
+    ("Manufacturing", "Industrial, automotive, and engineering employers"),
+    ("E-commerce & Retail", "Online commerce, retail, and consumer businesses"),
+]
+
+
+def seed_default_placement_industries(university_id: str, actor_id: str | None = None) -> None:
+    try:
+        existing = db.table("placement_industries").select("name").eq("university_id", university_id).execute().data or []
+        existing_names = {str(item.get("name") or "").casefold() for item in existing}
+        defaults = [
+            {"university_id": university_id, "name": name, "description": description, "created_by": actor_id}
+            for name, description in DEFAULT_PLACEMENT_INDUSTRIES
+            if name.casefold() not in existing_names
+        ]
+        if defaults:
+            db.table("placement_industries").insert(defaults).execute()
+    except Exception:
+        logger.exception("Could not seed default placement industries")
+
 
 def fail(message: str, code: int = 400, payload: dict[str, Any] | None = None):
     raise HTTPException(status_code=code, detail=payload or message)
@@ -776,6 +800,7 @@ class UniversityContractIn(BaseModel):
     contract_reference: str | None = Field(default=None, max_length=120)
     status: Literal["draft", "active", "renewed", "expired", "cancelled"] = "active"
     total_contract_value: float = Field(default=0, ge=0)
+    amount_paid: float = Field(default=0, ge=0)
     currency: str = Field(default="INR", min_length=3, max_length=3)
     work_order_date: date | None = None
     contract_start_date: date | None = None
@@ -791,6 +816,7 @@ class UniversityContractUpdateIn(BaseModel):
     contract_reference: str | None = Field(default=None, max_length=120)
     status: Literal["draft", "active", "renewed", "expired", "cancelled"] | None = None
     total_contract_value: float | None = Field(default=None, ge=0)
+    amount_paid: float | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     work_order_date: date | None = None
     contract_start_date: date | None = None
@@ -1661,6 +1687,7 @@ def list_universities(user=Depends(require_roles("super_admin"))):
 @app.post("/api/admin/universities", status_code=201)
 def create_university(payload: UniversityIn, user=Depends(require_roles("super_admin"))):
     created = db.table("universities").insert({**payload.model_dump(mode="json"), "created_by": user["id"]}).execute().data[0]
+    seed_default_placement_industries(created.get("id"), user.get("id"))
     record_audit(user, "created", "university", created.get("id"), created.get("id"), {"name": created.get("name"), "city": created.get("city")})
     return created
 
@@ -1708,7 +1735,12 @@ def _contract_rows_with_documents(contract_rows: list[dict[str, Any]]) -> list[d
     documents_by_contract: dict[str, list[dict[str, Any]]] = {}
     for document in documents:
         documents_by_contract.setdefault(str(document["contract_id"]), []).append(document)
-    return [{**row, "documents": documents_by_contract.get(str(row["id"]), [])} for row in contract_rows]
+    return [{**row, "pending_amount": max(0, float(row.get("total_contract_value") or 0) - float(row.get("amount_paid") or 0)), "documents": documents_by_contract.get(str(row["id"]), [])} for row in contract_rows]
+
+
+def _validate_contract_payment(total_value: float, amount_paid: float) -> None:
+    if amount_paid > total_value:
+        fail("Amount paid cannot be greater than the total contract value", 400)
 
 
 def _contract_storage_document_url(storage_path: str) -> str:
@@ -1726,6 +1758,7 @@ def list_university_contracts(university_id: str, user=Depends(require_roles("su
 @app.post("/api/admin/universities/{university_id}/contracts", status_code=201)
 def create_university_contract(university_id: str, payload: UniversityContractIn, user=Depends(require_roles("super_admin"))):
     university = _contract_university(university_id)
+    _validate_contract_payment(payload.total_contract_value, payload.amount_paid)
     values = {
         **payload.model_dump(mode="json"),
         "university_id": university_id,
@@ -1745,6 +1778,7 @@ def update_university_contract(contract_id: str, payload: UniversityContractUpda
     updates = payload.model_dump(mode="json", exclude_unset=True)
     if not updates:
         fail("No contract changes supplied", 400)
+    _validate_contract_payment(float(updates.get("total_contract_value", existing[0].get("total_contract_value") or 0)), float(updates.get("amount_paid", existing[0].get("amount_paid") or 0)))
     updates.update({"updated_by": user["id"], "updated_at": now().isoformat()})
     updated = db.table("university_contracts").update(updates).eq("id", contract_id).execute().data[0]
     record_audit(user, "updated", "university_contract", contract_id, updated.get("university_id"), {"fields": list(updates.keys())})
@@ -2395,6 +2429,8 @@ def list_metrics(season_id: str | None = None, user=Depends(require_roles("unive
 
 @app.post("/api/placement/metrics", status_code=201)
 def upsert_metric(payload: MetricIn, user=Depends(require_roles("coordinator"))):
+    if payload.drive_status != "not_scheduled" and not payload.drive_date:
+        fail("Drive date is required when a drive status is selected", 400)
     org = scoped_rows("organizations", user, payload.organization_id).execute().data or []
     if not org:
         fail("Organization is outside your authorized placement scope", 403)
@@ -2406,8 +2442,11 @@ def upsert_metric(payload: MetricIn, user=Depends(require_roles("coordinator")))
         fail("Choose a company category configured by your University Admin", 400)
     manager_id = org[0].get("placement_manager_id")
     data = {**payload.model_dump(mode="json"), "category_id": category_id, "university_id": user["university_id"], "placement_manager_id": manager_id, "updated_by": user["id"], "updated_at": now().isoformat(), "review_status": "pending", "review_note": None, "reviewed_by": None, "reviewed_at": None}
-    row = db.table("placement_metrics").select("id").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
+    row = db.table("placement_metrics").select("id,last_contact_date,next_follow_up_date").eq("season_id", payload.season_id).eq("organization_id", payload.organization_id).eq("placement_manager_id", manager_id).limit(1).execute().data or []
     if row:
+        if user.get("role") == "coordinator":
+            data["last_contact_date"] = row[0].get("last_contact_date")
+            data["next_follow_up_date"] = row[0].get("next_follow_up_date")
         updated = write_placement_metric(data, row[0]["id"])
         record_audit(user, "updated", "placement_metric", updated.get("id"), user.get("university_id"), {"organization_id": payload.organization_id, "pipeline_status": payload.pipeline_status, "outlook": payload.outlook})
         if manager_id and str(manager_id) != str(user["id"]):
