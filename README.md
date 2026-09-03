@@ -27,7 +27,10 @@ For optional dashboard NLP summaries, add the server-only `GROQ_API_KEY` to
 `backend/.env`. The backend uses Groq's OpenAI-compatible chat completions
 endpoint and defaults to `openai/gpt-oss-20b`. If the key is missing or the
 provider is unavailable, the dashboard falls back to deterministic placement
-insights. Never put the Groq key in frontend environment files.
+insights. The AI request uses a small allowlisted analytics schema and sends
+only the relevant aggregate or top-priority records, not the full CRM dataset.
+`GROQ_QUERY_MAX_TOKENS` and `GROQ_INSIGHTS_MAX_TOKENS` cap generated output.
+Never put the Groq key in frontend environment files.
 
 The browser never receives the service-role key. The backend enforces tenant and reporting-line scope before querying Supabase. Coordinators and regional managers receive masked organization/contact activity; university administrators can view their university's records; placement managers can write only their own records.
 

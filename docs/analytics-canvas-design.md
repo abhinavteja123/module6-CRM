@@ -56,3 +56,12 @@ Sections are compact and collapsible. Desktop keeps slicers visible; smaller scr
 | Keep analytics read-only | Add editing to the canvas | Preserves responsibility boundaries and avoids accidental data changes. |
 | Scope natural-language answers to the active slicers | Query the entire tenant regardless of the visible view | Keeps the answer explainable and prevents the query mode from contradicting the canvas below it. |
 | Provide a deterministic fallback | Make the AI provider mandatory | Keeps local development and deployments without a provider key useful while remaining transparent to the admin. |
+| Send a relevant semantic analytics contract | Send the complete analytics response to Groq | Reduces input tokens, keeps authorization and calculations server-side, and makes the provider replaceable. |
+| Use validated read-only operations selected from a semantic catalog | Allow arbitrary SQL or model-generated commands | Prevents data leakage and destructive actions while still supporting dynamic questions. |
+| Limit AI output and preserve provider errors | Use large unconstrained completions and silent fallback | Controls token usage and makes context-limit failures diagnosable. |
+
+## AI context contract
+
+The analytics query path keeps the full analytics response inside FastAPI for deterministic calculations, then uses a tiny schema-only Groq planning request to select one validated, read-only semantic operation from the user's question: KPI summary, target progress, manager/category/industry/city comparison, company ranking, pipeline breakdown, or attention records. Only that operation's schema and compact result are sent to the final Groq answer request. Company rows are limited to the highest-priority records for attention questions and top-ranked records for ranking questions; meeting reports are not sent to the AI path.
+
+The insights path sends only server-generated insight candidates and aggregate totals. Groq is used as a concise formatter/ranker, not as the calculator. Both paths cap generated tokens, request JSON output, validate references against authorized in-memory data, and fall back to the deterministic rules engine when Groq is unavailable or rejects the request. Provider status, input size, model, and response body are logged without exposing credentials.
